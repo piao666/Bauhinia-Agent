@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import sys
+
 from bauhinia_agent.agent.session import create_project_permission_manager
 from bauhinia_agent.permissions.types import PermissionMode
 from bauhinia_agent.tools.diagnostics import create_diagnostics_tool
@@ -10,6 +13,18 @@ from bauhinia_agent.tools.shell import create_shell_tool
 from bauhinia_agent.tools import create_builtin_registry
 from bauhinia_agent.tools.permission_registry import PermissionAwareToolRegistry
 from bauhinia_agent.utils.subprocess import CommandResult
+
+
+def _sleep_command(seconds: int) -> str:
+    if os.name == "nt":
+        return f'"{sys.executable}" -c "import time; time.sleep({seconds})"'
+    return f"sleep {seconds}"
+
+
+def _print_command(value: str) -> str:
+    if os.name == "nt":
+        return f'"{sys.executable}" -c "print({value!r}, end=\'\')"'
+    return f"printf {value}"
 
 
 def test_shell_executes_command_inside_root(tmp_path):
@@ -45,7 +60,7 @@ def test_shell_rejects_cwd_outside_root(tmp_path):
 def test_shell_handles_timeout(tmp_path):
     registry = create_builtin_registry(tmp_path, include_execution_tools=True)
 
-    result = registry.execute("shell", {"command": "sleep 999", "timeout_seconds": 1})
+    result = registry.execute("shell", {"command": _sleep_command(999), "timeout_seconds": 1})
 
     assert result.ok is False
     assert result.error == "命令执行超时"
@@ -90,7 +105,7 @@ def test_shell_rejects_non_positive_limits(tmp_path):
 def test_shell_truncates_large_stdout(tmp_path):
     registry = create_builtin_registry(tmp_path, include_execution_tools=True)
 
-    result = registry.execute("shell", {"command": "printf abcdef", "max_output_chars": 3})
+    result = registry.execute("shell", {"command": _print_command("abcdef"), "max_output_chars": 3})
 
     assert result.ok is True
     assert result.data["stdout"] == "abc\n\n[输出已截断]"

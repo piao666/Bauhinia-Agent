@@ -13,6 +13,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+
 from bauhinia_agent.runtime.cancellation import CancellationToken
 from bauhinia_agent.utils.text import truncate
 
@@ -95,6 +99,7 @@ def _run_command_with_process_group(
             ok=False,
             error=f"命令执行失败：{exc}",
         )
+    _attach_windows_job(process)
 
     deadline = time.monotonic() + timeout_seconds
     timed_out = False
@@ -120,11 +125,12 @@ def _run_command_with_process_group(
 
     if interrupted or timed_out:
         _terminate_process_group(process)
-        # communicate() again drains everything the process group emitted before
-        # termination; this is the output that must accompany a timeout result.
-        stdout, stderr = process.communicate()
+        # Drain output, but never wait forever for a descendant that inherited
+        # stdout/stderr after the process-group termination request.
+        stdout, stderr = _communicate_after_termination(process)
     stdout, stdout_truncated = truncate(stdout, max_output_chars)
     stderr, stderr_truncated = truncate(stderr, max_output_chars)
+    _release_windows_job(process)
 
     if interrupted:
         return CommandResult(
@@ -170,9 +176,12 @@ def _terminate_process_group(process: subprocess.Popen[str]) -> None:
     """Terminate the command and every descendant in its process group."""
 
     if os.name == "nt":
-        _taskkill_process_tree(process.pid)
+        if not _terminate_windows_job(process):
+            _taskkill_process_tree(process.pid)
         try:
-            process.wait(timeout=1)
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=0.5)
         except subprocess.TimeoutExpired:
             pass
         return
@@ -200,10 +209,105 @@ def _taskkill_process_tree(pid: int) -> None:
     """Best-effort Windows equivalent of killing a POSIX process group."""
 
     try:
-        subprocess.run(
+        taskkill = subprocess.Popen(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
-            capture_output=True,
-            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
+        try:
+            taskkill.wait(timeout=0.75)
+        except subprocess.TimeoutExpired:
+            taskkill.kill()
+            try:
+                taskkill.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                pass
     except OSError:
         pass
+
+
+def _attach_windows_job(process: subprocess.Popen[str]) -> None:
+    """Attach a Windows child tree to a killable Job Object when possible."""
+
+    if os.name != "nt":
+        return
+    try:
+        job = ctypes.windll.kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return
+        assigned = ctypes.windll.kernel32.AssignProcessToJobObject(job, process._handle)
+        if not assigned:
+            ctypes.windll.kernel32.CloseHandle(job)
+            return
+        process._bauhinia_job_handle = job
+    except (AttributeError, OSError):
+        return
+
+
+def _terminate_windows_job(process: subprocess.Popen[str]) -> bool:
+    if os.name != "nt":
+        return False
+    job = getattr(process, "_bauhinia_job_handle", None)
+    if not job:
+        return False
+    try:
+        return bool(ctypes.windll.kernel32.TerminateJobObject(job, 1))
+    except (AttributeError, OSError):
+        return False
+    finally:
+        try:
+            ctypes.windll.kernel32.CloseHandle(job)
+        except (AttributeError, OSError):
+            pass
+        process._bauhinia_job_handle = None
+
+
+def _release_windows_job(process: subprocess.Popen[str]) -> None:
+    if os.name != "nt":
+        return
+    job = getattr(process, "_bauhinia_job_handle", None)
+    if not job:
+        return
+    try:
+        ctypes.windll.kernel32.CloseHandle(job)
+    except (AttributeError, OSError):
+        pass
+    process._bauhinia_job_handle = None
+
+
+def _communicate_after_termination(process: subprocess.Popen[str]) -> tuple[str, str]:
+    """Collect terminated-process output without an unbounded pipe wait."""
+
+    try:
+        return process.communicate(timeout=1)
+    except subprocess.TimeoutExpired as exc:
+        stdout = _coerce_output(exc.stdout)
+        stderr = _coerce_output(exc.stderr)
+        if process.poll() is None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
+        return stdout, stderr
+    except (OSError, ValueError):
+        return "", ""
+
+
+def _coerce_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value

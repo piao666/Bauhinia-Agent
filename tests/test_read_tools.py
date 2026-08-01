@@ -150,7 +150,7 @@ def test_read_multi_checks_all_requested_paths_before_reading(tmp_path):
 
 def test_grep_finds_matching_lines(tmp_path):
     source = tmp_path / "bauhinia_agent.py"
-    source.write_text("alpha\nBauhiniaAgent agent\nbeta\n", encoding="utf-8")
+    source.write_text("alpha\nbauhinia_agent agent\nbeta\n", encoding="utf-8")
     registry = create_builtin_registry(tmp_path)
 
     result = registry.execute("grep", {"pattern": "bauhinia_agent", "include": "*.py"})
@@ -192,7 +192,7 @@ def test_grep_with_rg_filters_sensitive_environment(tmp_path, monkeypatch):
 def test_grep_falls_back_to_python_when_rg_is_missing(tmp_path, monkeypatch):
     (tmp_path / "src").mkdir()
     source = tmp_path / "src" / "bauhinia_agent.py"
-    source.write_text("alpha\nBauhiniaAgent agent\nbeta\n", encoding="utf-8")
+    source.write_text("alpha\nbauhinia_agent agent\nbeta\n", encoding="utf-8")
     monkeypatch.setattr(grep_module.shutil, "which", lambda _name: None)
     registry = create_builtin_registry(tmp_path)
 

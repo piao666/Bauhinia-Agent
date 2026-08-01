@@ -61,7 +61,9 @@ class TestRunCommand:
         result = run_command(["missing_cmd"], cwd=tmp_path)
 
         assert result.ok is False
-        assert "No such file or directory" in result.error
+        assert result.error is not None
+        assert "命令执行失败" in result.error
+        assert "No such file or directory" in result.error or "WinError 2" in result.error
 
     def test_stdout_truncation(self, tmp_path):
         result = run_command([sys.executable, "-c", "print('abcdefghij', end='')"], cwd=tmp_path, max_output_chars=5)
