@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bauhinia-agent"
+version = "0.1.0"
+description = "An evidence-gated local coding agent for software engineering."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "textual",
+    "prompt_toolkit",
+    "openai",
+    "anthropic",
+    "anyio",
+    "mcp>=1.28.1",
+    "python-dotenv",
+    "pydantic",
+    "PyYAML",
+    "tomlkit",
+    "portalocker",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+bauhinia-agent = "bauhinia_agent.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["bauhinia_agent*"]
+
+[tool.setuptools.package-data]
+bauhinia_agent = ["context/prompts/*.md", "app/*.tcss"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 200
+target-version = ["py311"]

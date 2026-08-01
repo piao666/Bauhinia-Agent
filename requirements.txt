@@ -1,0 +1,10 @@
+textual
+prompt_toolkit
+openai
+anthropic
+anyio
+python-dotenv
+pydantic
+PyYAML
+pytest
+portalocker
