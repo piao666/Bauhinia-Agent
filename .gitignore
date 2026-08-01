@@ -25,6 +25,8 @@ runs/
 data/
 .tools/
 docs/promo/
+docs/
+evaluation/
 *.doc
 *.docx
 *.docm

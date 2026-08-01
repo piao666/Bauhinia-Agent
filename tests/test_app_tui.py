@@ -415,7 +415,7 @@ def test_bauhinia_agent_app_topbar_colors_each_permission_mode(mode, color) -> N
     session.mode = mode
     app = BauhiniaAgentApp(current_session=session)
 
-    assert app._topbar_text() == ("[#7bba55]BauhiniaAgent[/]   [#303238]·[/]   [#7bba55]idle · ready[/]   " f"[#303238]·[/]   [{color}]{mode}[/]")
+    assert app._topbar_text() == ("[#7bba55]Bauhinia-Agent[/]   [#303238]·[/]   [#7bba55]idle · ready[/]   " f"[#303238]·[/]   [{color}]{mode}[/]")
     assert "sess_test" not in app._topbar_text()
 
 
@@ -425,14 +425,14 @@ def test_bauhinia_agent_app_topbar_shows_a_green_provider_and_hides_session_id()
         config=BauhiniaAgentTuiConfig(
             provider_name="yurenapi",
             provider_model="gpt-5.5",
-            project_name="BauhiniaAgent",
+            project_name="Bauhinia-Agent",
         ),
     )
 
     assert app._topbar_text() == (
-        "[#7bba55]BauhiniaAgent[/]   [#303238]·[/]   [#7bba55]idle · ready[/]   "
+        "[#7bba55]Bauhinia-Agent[/]   [#303238]·[/]   [#7bba55]idle · ready[/]   "
         "[#303238]·[/]   [#7bba55]yurenapi[/][#6e6d72]/gpt-5.5[/]   "
-        "[#303238]·[/]   [#cfd1d6]standard[/]   [#303238]·[/]   [#6e6d72]cwd BauhiniaAgent[/]"
+        "[#303238]·[/]   [#cfd1d6]standard[/]   [#303238]·[/]   [#6e6d72]cwd Bauhinia-Agent[/]"
     )
 
 
@@ -589,7 +589,7 @@ async def test_bauhinia_agent_app_uses_compact_welcome_in_an_80_by_24_terminal()
         welcome = app.query_one("#welcome")
         plain = getattr(getattr(welcome.content, "renderable", welcome.content), "plain", str(welcome.content))
 
-        assert "bauhinia_agent" in plain
+        assert "Bauhinia-Agent" in plain
         assert "██" not in plain
         assert app._welcome_particle_timer is None
         assert app.query_one("#input").display is True
@@ -609,17 +609,17 @@ def test_bauhinia_agent_app_topbar_uses_spacious_two_sided_layout_when_width_is_
         config=BauhiniaAgentTuiConfig(
             provider_name="yurenapi",
             provider_model="gpt-5.5",
-            project_name="BauhiniaAgent",
+            project_name="Bauhinia-Agent",
         ),
     )
 
     text = app._topbar_text(width=120)
 
-    assert text.startswith("[#7bba55]BauhiniaAgent[/]")
+    assert text.startswith("[#7bba55]Bauhinia-Agent[/]")
     assert "[#7bba55]idle · ready[/]" in text
     assert "sess_test" not in text
     assert "[#7bba55]yurenapi[/][#6e6d72]/gpt-5.5[/]" in text
-    assert "[#6e6d72]cwd BauhiniaAgent[/]" in text
+    assert "[#6e6d72]cwd Bauhinia-Agent[/]" in text
     assert " " * 20 in text
 
 
@@ -630,7 +630,7 @@ def test_bauhinia_agent_app_topbar_highlights_bypass_mode_and_truncates_long_ses
 
     app = BauhiniaAgentApp(current_session=BypassSession())
 
-    assert app._topbar_text() == ("[#7bba55]BauhiniaAgent[/]   [#303238]·[/]   [#7bba55]idle · ready[/]   " "[#303238]·[/]   [#ff6b5f]bypass[/]")
+    assert app._topbar_text() == ("[#7bba55]Bauhinia-Agent[/]   [#303238]·[/]   [#7bba55]idle · ready[/]   " "[#303238]·[/]   [#ff6b5f]bypass[/]")
 
 
 def test_bauhinia_agent_app_topbar_includes_live_activity_status() -> None:
@@ -647,7 +647,7 @@ def test_bauhinia_agent_app_topbar_truncates_long_activity_before_metadata() -> 
         config=BauhiniaAgentTuiConfig(
             provider_name="yurenapi",
             provider_model="very-long-model-name",
-            project_name="BauhiniaAgent",
+            project_name="Bauhinia-Agent",
         ),
     )
     app._activity_text = "thinking [...] " + "reading think tool result " * 8
@@ -655,7 +655,7 @@ def test_bauhinia_agent_app_topbar_truncates_long_activity_before_metadata() -> 
     text = app._topbar_text(width=150)
 
     assert "[#7bba55]yurenapi[/][#6e6d72]/very-long-model-name[/]" in text
-    assert "[#6e6d72]cwd BauhiniaAgent[/]" in text
+    assert "[#6e6d72]cwd Bauhinia-Agent[/]" in text
     assert "reading think tool result reading think tool result" not in text
     assert "thinking" in Text.from_markup(text).plain
 
@@ -666,7 +666,7 @@ def test_bauhinia_agent_app_topbar_fits_narrow_width_with_long_activity_and_meta
         config=BauhiniaAgentTuiConfig(
             provider_name="yurenapi",
             provider_model="very-long-model-name",
-            project_name="BauhiniaAgent",
+            project_name="Bauhinia-Agent",
         ),
     )
     app._activity_text = "thinking [...] " + "reading think tool result " * 8
@@ -677,14 +677,14 @@ def test_bauhinia_agent_app_topbar_fits_narrow_width_with_long_activity_and_meta
     assert "\n" not in plain
     assert len(plain) <= 80
     assert "sess_test" not in plain
-    assert plain.startswith("BauhiniaAgent")
+    assert plain.startswith("Bauhinia-Agent")
 
     narrow_plain = Text.from_markup(app._topbar_text(width=60)).plain
 
     assert "\n" not in narrow_plain
     assert len(narrow_plain) <= 60
     assert "sess_test" not in narrow_plain
-    assert narrow_plain.startswith("BauhiniaAgent")
+    assert narrow_plain.startswith("Bauhinia-Agent")
 
 
 def test_bauhinia_agent_app_topbar_truncates_narrow_metadata_to_one_row() -> None:
@@ -693,7 +693,7 @@ def test_bauhinia_agent_app_topbar_truncates_narrow_metadata_to_one_row() -> Non
         config=BauhiniaAgentTuiConfig(
             provider_name="yurenapi",
             provider_model="very-long-model-name",
-            project_name="BauhiniaAgent",
+            project_name="Bauhinia-Agent",
         ),
     )
 
@@ -701,7 +701,7 @@ def test_bauhinia_agent_app_topbar_truncates_narrow_metadata_to_one_row() -> Non
 
     assert "\n" not in plain
     assert len(plain) <= 60
-    assert plain.startswith("BauhiniaAgent")
+    assert plain.startswith("Bauhinia-Agent")
     assert "idle" in plain
     assert "sess_test" not in plain
 
@@ -719,7 +719,7 @@ def test_tui_transcript_records_structured_entries_with_stable_labels() -> None:
     )
 
     assert [entry.id for entry in transcript.entries] == [user.id, assistant.id, tool.id]
-    assert [entry.label for entry in transcript.entries] == ["you", "BauhiniaAgent", "tool exec_command running"]
+    assert [entry.label for entry in transcript.entries] == ["you", "Bauhinia-Agent", "tool exec_command running"]
     assert transcript.entries[-1].status == "running"
 
 
@@ -829,7 +829,7 @@ def test_bauhinia_agent_app_records_rendered_messages_in_transcript(monkeypatch)
 
     assert [(entry.kind, entry.label, entry.body) for entry in app.transcript.entries] == [
         (TuiEntryKind.USER, "you", "> hello"),
-        (TuiEntryKind.ASSISTANT, "BauhiniaAgent", "**hi**"),
+        (TuiEntryKind.ASSISTANT, "Bauhinia-Agent", "**hi**"),
     ]
 
 
@@ -1595,7 +1595,7 @@ def test_bauhinia_agent_app_streams_text_delta_without_repeating_final_text(monk
 
     assert [type(widget).__name__ for widget in output.mounted] == ["BauhiniaAgentMarkdown"]
     assert output.mounted[0].allow_select is False
-    assert output.mounted[0].updates[-1] == "BauhiniaAgent:\n\nhello"
+    assert output.mounted[0].updates[-1] == "Bauhinia-Agent:\n\nhello"
     assert app._stream_text_buffer == "hello"
     assert runner.seen == [
         ChatStreamEvent(kind="text_delta", text="he"),
@@ -1618,7 +1618,7 @@ def test_bauhinia_agent_app_streaming_skips_normalized_duplicate_assistant_line(
 
     assert [type(widget).__name__ for widget in output.mounted] == ["BauhiniaAgentMarkdown"]
     assert output.mounted[0].allow_select is False
-    assert output.mounted[0].updates[-1] == "BauhiniaAgent:\n\nhello"
+    assert output.mounted[0].updates[-1] == "Bauhinia-Agent:\n\nhello"
 
 
 def test_bauhinia_agent_app_streaming_skips_replaying_intermediate_assistant_lines(monkeypatch) -> None:
@@ -1642,7 +1642,7 @@ def test_bauhinia_agent_app_streaming_skips_replaying_intermediate_assistant_lin
     app._restore_stream_event_handler(previous_handler)
 
     assert [type(widget).__name__ for widget in output.mounted] == ["BauhiniaAgentMarkdown"]
-    assert output.mounted[0].updates[-1] == "BauhiniaAgent:\n\n最终结论"
+    assert output.mounted[0].updates[-1] == "Bauhinia-Agent:\n\n最终结论"
     assert [entry.body for entry in app.transcript.entries if entry.kind == TuiEntryKind.ASSISTANT] == ["最终结论"]
 
 
@@ -1660,12 +1660,12 @@ def test_bauhinia_agent_app_paces_stream_markdown_updates(monkeypatch) -> None:
     markdown = output.mounted[0]
     assert type(markdown).__name__ == "BauhiniaAgentMarkdown"
     assert markdown.allow_select is False
-    assert markdown.updates == ["BauhiniaAgent:\n\n我"]
+    assert markdown.updates == ["Bauhinia-Agent:\n\n我"]
     assert app._stream_text_buffer == "我在这里"
 
     app._flush_stream_text()
 
-    assert markdown.updates[-1] == "BauhiniaAgent:\n\n我在这里"
+    assert markdown.updates[-1] == "Bauhinia-Agent:\n\n我在这里"
 
 
 def test_bauhinia_agent_app_does_not_scroll_stream_when_render_is_deferred(monkeypatch) -> None:
@@ -1822,7 +1822,7 @@ def test_bauhinia_agent_app_replaces_partial_stream_when_final_response_differs(
     app._restore_stream_event_handler(previous_handler)
 
     assert [type(widget).__name__ for widget in output.mounted] == ["BauhiniaAgentMarkdown"]
-    assert output.mounted[0].updates[-1] == "BauhiniaAgent:\n\ncomplete ok"
+    assert output.mounted[0].updates[-1] == "Bauhinia-Agent:\n\ncomplete ok"
     assert app._stream_text_buffer == "complete ok"
 
 
@@ -2431,8 +2431,8 @@ def test_bauhinia_agent_app_starts_new_stream_block_after_tool_event(monkeypatch
     first_markdown, _, second_markdown = output.mounted
     assert first_markdown.allow_select is False
     assert second_markdown.allow_select is False
-    assert first_markdown.updates[-1] == "BauhiniaAgent:\n\n我先看看。"
-    assert second_markdown.updates[-1] == "BauhiniaAgent:\n\n看完了。"
+    assert first_markdown.updates[-1] == "Bauhinia-Agent:\n\n我先看看。"
+    assert second_markdown.updates[-1] == "Bauhinia-Agent:\n\n看完了。"
 
 
 def test_permission_requested_tool_event_uses_permission_style() -> None:
