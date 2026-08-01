@@ -1,4 +1,7 @@
 .venv/
+/AGENTS.md
+/TASK.md
+/Bauhinia_agent_PRD.md
 __pycache__/
 *.DS_Store
 .playwright-cli/
