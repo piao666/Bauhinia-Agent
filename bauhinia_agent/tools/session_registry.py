@@ -12,6 +12,7 @@ from bauhinia_agent.context.writer import SessionEventWriter
 from bauhinia_agent.context.task_boundary import TaskBoundaryPolicy, TaskBoundaryService
 from bauhinia_agent.permissions.manager import PermissionManager
 from bauhinia_agent.planning.service import TaskPlanService
+from bauhinia_agent.planning.task_plan_bridge import TaskPlanEvoBridge
 from bauhinia_agent.skills.models import SkillCatalog
 from bauhinia_agent.tools.load_skill import create_load_skill_tool
 from bauhinia_agent.tools.permission_registry import PermissionAwareToolRegistry
@@ -86,9 +87,11 @@ def create_session_tool_registry(
     if store is not None and writer is not None:
         if writer.store is not store or writer.session_id != session_id:
             raise ValueError("task-plan service requires the live session store and writer")
+        evo_bridge = TaskPlanEvoBridge(root=str(store.root), session_id=session_id)
         service = TaskPlanService(
             store=store,
             writer=writer,
+            observe_evo_plan=evo_bridge.observe,
         )
         for tool in (
             create_task_create_tool(service),

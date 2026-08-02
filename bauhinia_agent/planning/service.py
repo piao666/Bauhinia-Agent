@@ -7,7 +7,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 import portalocker
 
@@ -35,6 +35,7 @@ class TaskPlanMutation:
     projection: dict[str, object]
     changed: bool
     changes: tuple[dict[str, object], ...] = ()
+    evo_diagnostic: str | None = None
 
 
 class TaskPlanService:
@@ -45,9 +46,11 @@ class TaskPlanService:
         *,
         store: JsonlSessionStore,
         writer: SessionEventWriter,
+        observe_evo_plan: Callable[[TaskPlan, str], str | None] | None = None,
     ) -> None:
         self._store = store
         self._writer = writer
+        self._observe_evo_plan = observe_evo_plan
 
     def current(self) -> TaskPlan | None:
         """Return the authoritative plan rebuilt from the event log."""
@@ -149,9 +152,11 @@ class TaskPlanService:
                 changes=result.changes,
                 snapshot=result.plan,
             )
+        evo_diagnostic = self._observe_evo_plan(result.plan, operation) if result.changed and self._observe_evo_plan is not None else None
         return TaskPlanMutation(
             plan=result.plan,
             projection=project_plan(result.plan),
             changed=result.changed,
             changes=result.changes,
+            evo_diagnostic=evo_diagnostic,
         )
