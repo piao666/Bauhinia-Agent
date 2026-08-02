@@ -25,17 +25,8 @@ def _request(
         active_task_hash=active_task_hash,
         target_tokens=target_tokens,
         current_turn=current_turn,
-        estimate_tokens=lambda candidate: sum(
-            estimate_text_tokens(part.content)
-            for message in candidate.messages
-            for part in message.parts
-        ),
-        consumed_tool_result_part_ids=frozenset(
-            part.id
-            for message in view.messages
-            for part in message.parts
-            if part.kind == "tool_result"
-        ),
+        estimate_tokens=lambda candidate: sum(estimate_text_tokens(part.content) for message in candidate.messages for part in message.parts),
+        consumed_tool_result_part_ids=frozenset(part.id for message in view.messages for part in message.parts if part.kind == "tool_result"),
         **kwargs,
     )
 

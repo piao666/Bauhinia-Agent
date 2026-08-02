@@ -9,7 +9,6 @@ from typing import Literal
 from bauhinia_agent.context.budget_defaults import DEFAULT_CONTEXT_WINDOW, DEFAULT_OUTPUT_RESERVE
 from bauhinia_agent.providers.types import ChatMessage, ToolDefinition
 
-
 IMAGE_INPUT_TOKEN_ESTIMATE = 1_024
 
 
@@ -97,15 +96,8 @@ def _estimate_chat_message_tokens(message: ChatMessage) -> int:
     tokens = estimate_text_tokens(message.content)
     tokens += estimate_text_tokens(message.name or "")
     tokens += estimate_text_tokens(message.tool_call_id or "")
-    tokens += sum(
-        estimate_text_tokens(call.name + json.dumps(call.arguments, ensure_ascii=False, sort_keys=True))
-        for call in message.tool_calls
-    )
-    tokens += sum(
-        IMAGE_INPUT_TOKEN_ESTIMATE
-        for part in message.content_parts or []
-        if part.type == "image"
-    )
+    tokens += sum(estimate_text_tokens(call.name + json.dumps(call.arguments, ensure_ascii=False, sort_keys=True)) for call in message.tool_calls)
+    tokens += sum(IMAGE_INPUT_TOKEN_ESTIMATE for part in message.content_parts or [] if part.type == "image")
     return tokens
 
 

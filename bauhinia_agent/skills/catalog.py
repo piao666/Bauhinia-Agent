@@ -42,10 +42,7 @@ def render_skill_catalog(catalog: SkillCatalog) -> str:
         SKILL_DESCRIPTION_MAX_CHARS,
         description_budget // len(skills),
     )
-    lines = [
-        _catalog_line(skill, description_limit=per_skill_limit)
-        for skill in skills
-    ]
+    lines = [_catalog_line(skill, description_limit=per_skill_limit) for skill in skills]
     return "\n".join([*lines, footer])
 
 

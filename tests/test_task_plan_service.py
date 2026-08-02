@@ -17,12 +17,7 @@ import bauhinia_agent.planning.service as service_module
 
 def test_planning_service_uses_cross_platform_file_lock() -> None:
     tree = ast.parse(inspect.getsource(service_module))
-    imported_modules = {
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-    }
+    imported_modules = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
 
     assert "portalocker" in imported_modules
     assert "fcntl" not in imported_modules

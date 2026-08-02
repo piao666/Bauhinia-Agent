@@ -133,11 +133,7 @@ class AgentLoop:
             for tool in tools:
                 if tool.name not in self.session.tool_registry.names():
                     self.session.tool_registry.register(tool)
-        self._mcp_tool_names = {
-            name
-            for name in self.session.tool_registry.names()
-            if name.startswith("mcp__")
-        }
+        self._mcp_tool_names = {name for name in self.session.tool_registry.names() if name.startswith("mcp__")}
         self._active_mcp_tool_names: set[str] = set()
         self.tool_executor = ToolExecutor(
             session=session,
@@ -564,9 +560,7 @@ class AgentLoop:
         except ProviderError as exc:
             if not exc.requires_compaction:
                 raise
-            result = self._compact_for_prompt_too_long(
-                runtime_instruction=runtime_instruction
-            )
+            result = self._compact_for_prompt_too_long(runtime_instruction=runtime_instruction)
             if result is None or result.status != "success":
                 raise
             return self._complete_once(
@@ -633,9 +627,7 @@ class AgentLoop:
                     )
                 if not exc.requires_compaction:
                     raise
-                result = self._compact_for_prompt_too_long(
-                    runtime_instruction=runtime_instruction
-                )
+                result = self._compact_for_prompt_too_long(runtime_instruction=runtime_instruction)
                 if result is None or result.status != "success":
                     raise
                 return await self._stream_once_attempt(
@@ -1058,10 +1050,7 @@ class AgentLoop:
         for definition in self.session.tool_registry.definitions():
             if definition.name in HIDDEN_TOOL_STATUS_NAMES:
                 continue
-            if (
-                definition.name in self._mcp_tool_names
-                and definition.name not in self._active_mcp_tool_names
-            ):
+            if definition.name in self._mcp_tool_names and definition.name not in self._active_mcp_tool_names:
                 continue
             definitions.append(self._augment_tool_definition(definition))
         return definitions
@@ -1151,11 +1140,7 @@ class AgentLoop:
         activated = payload.get("activated_tools")
         if not isinstance(activated, list):
             return
-        self._active_mcp_tool_names.update(
-            name
-            for name in activated
-            if isinstance(name, str) and name in self._mcp_tool_names
-        )
+        self._active_mcp_tool_names.update(name for name in activated if isinstance(name, str) and name in self._mcp_tool_names)
 
     def _append_pending_guidance(self) -> None:
         if self.guidance_provider is None:

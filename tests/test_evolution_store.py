@@ -134,10 +134,7 @@ def test_lock_timeout_is_visible(tmp_path) -> None:
         [
             sys.executable,
             "-c",
-            "import portalocker, sys, time\n"
-            "with portalocker.Lock(sys.argv[1], mode='a+b', timeout=5, flags=portalocker.LOCK_EX):\n"
-            "    print('locked', flush=True)\n"
-            "    time.sleep(2)\n",
+            "import portalocker, sys, time\n" "with portalocker.Lock(sys.argv[1], mode='a+b', timeout=5, flags=portalocker.LOCK_EX):\n" "    print('locked', flush=True)\n" "    time.sleep(2)\n",
             str(store.lock_path),
         ],
         stdout=subprocess.PIPE,

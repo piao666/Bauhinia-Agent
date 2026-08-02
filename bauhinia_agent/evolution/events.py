@@ -347,7 +347,9 @@ class EvaluationCompletedPayload(EvoPayload):
 
     @classmethod
     def from_dict(cls, raw: object) -> "EvaluationCompletedPayload":
-        values, extensions = _payload_parts(raw, known={"dataset", "evaluator_version", "passed", "sample_count", "success_rate", "verification_quality", "cost", "latency_ms", "risk_event_count", "uncertainty"})
+        values, extensions = _payload_parts(
+            raw, known={"dataset", "evaluator_version", "passed", "sample_count", "success_rate", "verification_quality", "cost", "latency_ms", "risk_event_count", "uncertainty"}
+        )
 
         def optional_rate(name: str) -> float | None:
             value = values.get(name)

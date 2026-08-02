@@ -34,6 +34,7 @@ class SkillLoader:
             raise SkillLoadError(f"skill path escapes root: {skill.path}")
         return path
 
+
 def _extract_required_files(content: str) -> list[str]:
     required: list[str] = []
     in_required_block = False

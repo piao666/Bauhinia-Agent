@@ -72,9 +72,7 @@ def test_create_starts_new_plan_only_after_current_plan_is_terminal() -> None:
     )
 
     assert result.plan.revision == 5
-    assert [(task.id, task.status, task.order) for task in result.plan.tasks] == [
-        ("new", "in_progress", 0)
-    ]
+    assert [(task.id, task.status, task.order) for task in result.plan.tasks] == [("new", "in_progress", 0)]
 
 
 def test_create_rejects_start_new_plan_while_current_plan_is_active() -> None:

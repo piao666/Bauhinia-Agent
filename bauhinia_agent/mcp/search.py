@@ -61,10 +61,7 @@ def create_mcp_tool_search(entries: tuple[McpSearchEntry, ...]) -> Tool:
     return Tool(
         definition=ToolDefinition(
             name=MCP_TOOL_SEARCH_NAME,
-            description=(
-                "Search connected MCP tools by capability. Matching tool schemas "
-                "become available for the remainder of the current user turn."
-            ),
+            description=("Search connected MCP tools by capability. Matching tool schemas " "become available for the remainder of the current user turn."),
             parameters={
                 "type": "object",
                 "properties": {
@@ -108,9 +105,5 @@ def _tokens(value: str) -> tuple[str, ...]:
 def _render_matches(matches: tuple[McpSearchEntry, ...]) -> str:
     if not matches:
         return "No matching MCP tools found. Try a more specific capability description."
-    lines = [
-        f"- {entry.definition.name}: {entry.server}/{entry.tool} — "
-        f"{' '.join(entry.definition.description.split()) or 'No description provided.'}"
-        for entry in matches
-    ]
+    lines = [f"- {entry.definition.name}: {entry.server}/{entry.tool} — " f"{' '.join(entry.definition.description.split()) or 'No description provided.'}" for entry in matches]
     return "Matching MCP tools activated for this user turn:\n" + "\n".join(lines)

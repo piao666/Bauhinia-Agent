@@ -325,7 +325,9 @@ def test_run_repl_routes_next_line_to_pending_permission(capsys):
 
     assert runner.turns == ["write file"]
     assert runner.resumes == [("perm_1", "allow_once")]
-    assert capsys.readouterr().out == ("Bauhinia-Agent> need permission\n" "Permission> Allow?\n" "Choose:\n" "  1. Deny\n" "  2. Allow once\n" "  3. Allow always for same scope\n" "Bauhinia-Agent> done\n")
+    assert capsys.readouterr().out == (
+        "Bauhinia-Agent> need permission\n" "Permission> Allow?\n" "Choose:\n" "  1. Deny\n" "  2. Allow once\n" "  3. Allow always for same scope\n" "Bauhinia-Agent> done\n"
+    )
 
 
 def test_run_repl_accepts_human_permission_aliases(capsys):

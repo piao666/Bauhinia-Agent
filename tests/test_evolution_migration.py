@@ -8,12 +8,7 @@ from bauhinia_agent.evolution.store import EvoEventStore
 
 
 def _legacy_line(event_id: str = "event_legacy") -> str:
-    return (
-        '{"id":"'
-        + event_id
-        + '","type":"PlanCreated","created_at":"2026-08-01T00:00:00Z",'
-        '"sequence":1,"run_id":"run_1","payload":{"goal":"legacy","legacy_field":true}}\n'
-    )
+    return '{"id":"' + event_id + '","type":"PlanCreated","created_at":"2026-08-01T00:00:00Z",' '"sequence":1,"run_id":"run_1","payload":{"goal":"legacy","legacy_field":true}}\n'
 
 
 def test_detect_and_read_legacy_schema_without_mutating_source(tmp_path) -> None:

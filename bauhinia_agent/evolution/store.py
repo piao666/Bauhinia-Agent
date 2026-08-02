@@ -230,11 +230,7 @@ class EvoEventStore:
             before_hash = hashlib.sha256(data).hexdigest()
             diagnostic = EvoStoreDiagnostic(
                 code="missing_final_newline" if candidate is not None else "truncated_tail",
-                message=(
-                    "final Evo event is valid but missing its newline"
-                    if candidate is not None
-                    else "final Evo JSONL tail is incomplete and will be truncated"
-                ),
+                message=("final Evo event is valid but missing its newline" if candidate is not None else "final Evo JSONL tail is incomplete and will be truncated"),
                 line_number=data.count(b"\n") + 1,
                 byte_offset=tail_offset,
                 event_id=candidate.event_id if candidate is not None else None,
@@ -430,8 +426,7 @@ class EvoEventStore:
 
     @staticmethod
     def _create_schema(connection: sqlite3.Connection) -> None:
-        connection.executescript(
-            """
+        connection.executescript("""
             CREATE TABLE IF NOT EXISTS projection_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -458,8 +453,7 @@ class EvoEventStore:
             CREATE INDEX IF NOT EXISTS idx_event_type ON event_index(event_type);
             CREATE INDEX IF NOT EXISTS idx_run_sequence ON event_index(run_id, sequence);
             CREATE INDEX IF NOT EXISTS idx_parent_event ON event_index(parent_event_id);
-            """
-        )
+            """)
 
     @staticmethod
     def _insert_projection_event(connection: sqlite3.Connection, event: EvoEvent) -> None:

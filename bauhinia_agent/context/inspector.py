@@ -114,13 +114,7 @@ def _count_unconsumed_tool_results(
     *,
     consumed: set[str],
 ) -> int:
-    return sum(
-        1
-        for message in messages
-        if message.role == "tool"
-        for part in message.parts
-        if part.kind == "tool_result" and part.id not in consumed
-    )
+    return sum(1 for message in messages if message.role == "tool" for part in message.parts if part.kind == "tool_result" and part.id not in consumed)
 
 
 def _count_archived_parts(messages: list[AgentMessage]) -> int:

@@ -1000,10 +1000,7 @@ def test_agent_loop_streaming_incomplete_message_does_not_persist_assistant(tmp_
     view = store.rebuild_session_view("sess_stream_incomplete")
     assert [message.role for message in view.messages] == ["user"]
     assert session.runtime_state.consumed_tool_result_part_ids == set()
-    assert all(
-        event.type != "provider_projection_consumed"
-        for event in store.list_events("sess_stream_incomplete")
-    )
+    assert all(event.type != "provider_projection_consumed" for event in store.list_events("sess_stream_incomplete"))
 
 
 def test_streaming_success_records_projected_tool_result_as_consumed(tmp_path) -> None:
@@ -1024,16 +1021,12 @@ def test_streaming_success_records_projected_tool_result_as_consumed(tmp_path) -
         tool_call=tool_call,
         result=ToolResult(name="echo", ok=True, content="echo:hello"),
     )
-    provider = StreamingProvider(
-        [ChatResponse(provider="fake-stream", model="fake-stream-model", content="ok")]
-    )
+    provider = StreamingProvider([ChatResponse(provider="fake-stream", model="fake-stream-model", content="ok")])
 
     asyncio.run(AgentLoop(session=session, provider=provider)._stream_once())
 
     assert len(session.runtime_state.consumed_tool_result_part_ids) == 1
-    assert [event.type for event in store.list_events(session.session_id)].count(
-        "provider_projection_consumed"
-    ) == 1
+    assert [event.type for event in store.list_events(session.session_id)].count("provider_projection_consumed") == 1
 
 
 def test_agent_loop_streaming_retries_once_after_prompt_too_long_compaction(tmp_path) -> None:
@@ -1349,12 +1342,7 @@ def test_agent_loop_rejects_guessed_mcp_tool_before_permission_or_transport(tmp_
     AgentLoop(session=session, provider=provider).run_user_turn("Read issue 12")
 
     assert caller.calls == []
-    tool_part = next(
-        part
-        for message in session.rebuild_view().messages
-        for part in message.parts
-        if part.kind == "tool_result" and part.metadata["tool_name"] == "mcp__github__get_issue"
-    )
+    tool_part = next(part for message in session.rebuild_view().messages for part in message.parts if part.kind == "tool_result" and part.metadata["tool_name"] == "mcp__github__get_issue")
     assert tool_part.metadata["ok"] is False
     assert tool_part.metadata["data"]["mcp_activation_required"] is True
     assert session.pending_permission_execution is None
@@ -1454,16 +1442,12 @@ def test_agent_loop_permission_resume_keeps_mcp_schema_active(tmp_path) -> None:
     waiting = loop.run_user_turn_interactive("Read issue")
 
     assert waiting.pending_input is not None
-    assert "mcp__github__get_issue" in {
-        tool.name for tool in provider.requests[1].tools
-    }
+    assert "mcp__github__get_issue" in {tool.name for tool in provider.requests[1].tools}
     result = loop.resume_with_user_input(waiting.pending_input.id, "allow_once")
 
     assert result.response is not None
     assert result.response.content == "done"
-    assert "mcp__github__get_issue" in {
-        tool.name for tool in provider.requests[2].tools
-    }
+    assert "mcp__github__get_issue" in {tool.name for tool in provider.requests[2].tools}
     assert caller.calls == [("github", "get_issue", {})]
 
 
@@ -1804,11 +1788,7 @@ def test_main_provider_request_includes_latest_task_plan_snapshot_without_task_l
 
     AgentLoop(session=session, provider=provider).run_user_turn("继续执行")
 
-    snapshots = [
-        message.content
-        for message in provider.requests[0].messages
-        if message.role == "system" and message.content.startswith("Current TaskPlan snapshot")
-    ]
+    snapshots = [message.content for message in provider.requests[0].messages if message.role == "system" and message.content.startswith("Current TaskPlan snapshot")]
     assert snapshots == [
         "Current TaskPlan snapshot (authoritative for this request):\n"
         "revision=1 mode=linear\n"
@@ -1858,16 +1838,8 @@ def test_main_provider_request_refreshes_task_plan_snapshot_after_update(tmp_pat
 
     AgentLoop(session=session, provider=provider).run_user_turn("继续执行")
 
-    first_snapshot = next(
-        message.content
-        for message in provider.requests[0].messages
-        if message.role == "system" and message.content.startswith("Current TaskPlan snapshot")
-    )
-    second_snapshot = next(
-        message.content
-        for message in provider.requests[1].messages
-        if message.role == "system" and message.content.startswith("Current TaskPlan snapshot")
-    )
+    first_snapshot = next(message.content for message in provider.requests[0].messages if message.role == "system" and message.content.startswith("Current TaskPlan snapshot"))
+    second_snapshot = next(message.content for message in provider.requests[1].messages if message.role == "system" and message.content.startswith("Current TaskPlan snapshot"))
     assert "revision=1 mode=linear" in first_snapshot
     assert "- implement [in_progress]: 写实现" in first_snapshot
     assert "revision=2 mode=linear" in second_snapshot
@@ -3090,11 +3062,7 @@ def test_agent_loop_runs_auto_once_before_each_main_provider_request(tmp_path) -
         context_manager=context_manager,
     ).run_user_turn("调用大工具")
 
-    auto_calls = [
-        call
-        for call in context_manager.calls
-        if call.trigger == ContextWindowTrigger.AUTO
-    ]
+    auto_calls = [call for call in context_manager.calls if call.trigger == ContextWindowTrigger.AUTO]
     assert len(auto_calls) == 2
     assert len(provider.requests) == 2
 
@@ -3121,16 +3089,9 @@ def test_sync_main_request_records_projected_tool_result_as_consumed(tmp_path) -
 
     AgentLoop(session=session, provider=provider, tools=[_echo_tool()])._complete_once()
 
-    tool_part = next(
-        part
-        for message in session.rebuild_view().messages
-        for part in message.parts
-        if part.kind == "tool_result"
-    )
+    tool_part = next(part for message in session.rebuild_view().messages for part in message.parts if part.kind == "tool_result")
     assert tool_part.id in session.runtime_state.consumed_tool_result_part_ids
-    assert [event.type for event in store.list_events(session.session_id)].count(
-        "provider_projection_consumed"
-    ) == 1
+    assert [event.type for event in store.list_events(session.session_id)].count("provider_projection_consumed") == 1
 
 
 def test_agent_loop_interactive_pauses_on_ask_user(tmp_path) -> None:
