@@ -1,4 +1,5 @@
 """P3 memory projection over the canonical append-only Evo event store."""
+
 from __future__ import annotations
 
 import re
