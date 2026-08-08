@@ -18,6 +18,7 @@ from bauhinia_agent.agent.session import AgentSession, PendingPermissionExecutio
 from bauhinia_agent.agent.task_boundary_classifier import TaskBoundaryClassifier
 from bauhinia_agent.agent.task_plan_policy import TaskPlanPolicy, render_current_task_plan_snapshot
 from bauhinia_agent.agent.tool_execution import ToolExecutionEvent, ToolExecutor
+from bauhinia_agent.agent.evo_observer import AgentEvoObserver
 from bauhinia_agent.agent.tool_settlement import ToolCallSettlement
 from bauhinia_agent.agent.background import (
     DEFAULT_BACKGROUND_TOOL_NAMES,
@@ -93,6 +94,7 @@ class AgentLoop:
         background_manager: BackgroundJobManager | None = None,
         background_tool_names: frozenset[str] | None = None,
         enable_delegate_tool: bool = True,
+        evolution_observer: AgentEvoObserver | None = None,
     ) -> None:
         self.session = session
         self.tool_settlement = ToolCallSettlement(session)
@@ -115,6 +117,7 @@ class AgentLoop:
         self.background_manager = background_manager
         self.background_tool_names = background_tool_names if background_tool_names is not None else DEFAULT_BACKGROUND_TOOL_NAMES
         self.enable_delegate_tool = enable_delegate_tool
+        self.evolution_observer = evolution_observer
         self._task_plan_reconciliation_attempted = False
         self._tool_rounds_completed = 0
         self.task_boundary_classifier = TaskBoundaryClassifier(
@@ -208,6 +211,7 @@ class AgentLoop:
             )
 
         self._begin_turn()
+        self._begin_evolution_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
         message_id = self.session.append_user_message(content, attachments=attachments)
@@ -288,6 +292,7 @@ class AgentLoop:
             )
 
         self._begin_turn()
+        self._begin_evolution_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
         message_id = self.session.append_user_message(content, attachments=attachments)
@@ -747,6 +752,7 @@ class AgentLoop:
 
     def _complete_turn(self, response: ChatResponse) -> AgentTurnResult:
         self.session.append_assistant_response(response)
+        self._complete_evolution_turn(response)
         return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=response)
 
     def _continue_tool_loop_from_response(
@@ -864,17 +870,17 @@ class AgentLoop:
         permission_request: PermissionRequest | None = None,
         prewrite_review: dict[str, object] | None = None,
     ) -> None:
-        if self.tool_event_handler is None:
-            return
-        self.tool_event_handler(
-            ToolExecutionEvent(
-                kind=kind,
-                tool_call=tool_call,
-                result=result,
-                permission_request=permission_request,
-                prewrite_review=prewrite_review,
-            )
+        event = ToolExecutionEvent(
+            kind=kind,
+            tool_call=tool_call,
+            result=result,
+            permission_request=permission_request,
+            prewrite_review=prewrite_review,
         )
+        if self.evolution_observer is not None:
+            self.evolution_observer.observe_tool_event(event)
+        if self.tool_event_handler is not None:
+            self.tool_event_handler(event)
 
     def _prepare_main_provider_request(
         self,
@@ -1115,6 +1121,14 @@ class AgentLoop:
             self.turn_started_at = self.clock()
             self._task_plan_reconciliation_attempted = False
             self._tool_rounds_completed = 0
+
+    def _begin_evolution_turn(self) -> None:
+        if self.evolution_observer is not None:
+            self.evolution_observer.begin_turn()
+
+    def _complete_evolution_turn(self, response: ChatResponse) -> None:
+        if self.evolution_observer is not None:
+            self.evolution_observer.complete_turn(response)
 
     def _validate_mcp_tool_call(self, tool_call: ToolCall) -> ToolResult | None:
         if tool_call.name not in self._mcp_tool_names:

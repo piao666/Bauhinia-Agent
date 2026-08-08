@@ -21,6 +21,7 @@ import anyio
 from bauhinia_agent.runtime.cancellation import CancellationToken
 from bauhinia_agent.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from bauhinia_agent.agent.loop import AgentLoop, ToolExecutionEvent
+from bauhinia_agent.agent.evo_observer import AgentEvoObserver
 from bauhinia_agent.agent.background import BackgroundJobManager
 from bauhinia_agent.agent.loop_limits import AgentLoopLimits
 from bauhinia_agent.agent.session import AgentSession
@@ -93,6 +94,7 @@ class AgentChatRunner:
     stream_event_handler: Callable[[ChatStreamEvent], None] | None = None
     tool_event_handler: Callable[[ToolExecutionEvent], None] | None = None
     background_manager: BackgroundJobManager | None = None
+    evolution_enabled: bool = False
     pending_guidance: list[str] = field(default_factory=list)
     _guidance_lock: threading.Lock = field(default_factory=threading.Lock)
     _cancellation_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -307,6 +309,11 @@ class AgentChatRunner:
         }
         if streaming:
             kwargs["stream_event_handler"] = self.stream_event_handler
+        if self.evolution_enabled:
+            kwargs["evolution_observer"] = AgentEvoObserver(
+                session=self.current_session.session,
+                provider=self.provider,
+            )
         loop = AgentLoop(**kwargs)
         self.loops.append(loop)
         return loop

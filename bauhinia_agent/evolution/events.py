@@ -27,6 +27,9 @@ EVO_EVENT_TYPES = frozenset(
         "MemoryCreated",
         "MemoryUsed",
         "ExperienceCandidateCreated",
+        "CandidateMergeProposed",
+        "CandidateConflictDetected",
+        "CandidateReviewRecorded",
         "EvaluationCompleted",
         "PromotionChanged",
         "SelfModelUpdated",
@@ -342,25 +345,181 @@ class MemoryUsedPayload(EvoPayload):
 @dataclass(frozen=True, slots=True)
 class ExperienceCandidateCreatedPayload(EvoPayload):
     kind: str
+    summary: str
     scope: str
     applicability: str
     confidence: float
     source_event_ids: tuple[str, ...]
     evidence_refs: tuple[str, ...]
+    counterexamples: tuple[str, ...] = ()
+    novelty: float | None = None
+    novelty_status: str = "unassessed"
+    source_run_ids: tuple[str, ...] = ()
+    environment_summary: str | None = None
     lifecycle_state: str = "Candidate"
     extensions: dict[str, object] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_dict(cls, raw: object) -> "ExperienceCandidateCreatedPayload":
-        values, extensions = _payload_parts(raw, known={"kind", "scope", "applicability", "confidence", "source_event_ids", "evidence_refs", "lifecycle_state"})
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "kind",
+                "summary",
+                "scope",
+                "applicability",
+                "confidence",
+                "source_event_ids",
+                "evidence_refs",
+                "counterexamples",
+                "novelty",
+                "novelty_status",
+                "source_run_ids",
+                "environment_summary",
+                "lifecycle_state",
+            },
+        )
         return cls(
             kind=_require_text(values.get("kind"), field="kind"),
+            summary=_require_text(values.get("summary", "Candidate summary unavailable."), field="summary"),
             scope=_require_text(values.get("scope"), field="scope"),
             applicability=_require_text(values.get("applicability"), field="applicability"),
             confidence=_require_confidence(values.get("confidence")),
             source_event_ids=_string_list(values.get("source_event_ids"), field="source_event_ids"),
             evidence_refs=_string_list(values.get("evidence_refs"), field="evidence_refs"),
+            counterexamples=_string_list(values.get("counterexamples"), field="counterexamples"),
+            novelty=None if values.get("novelty") is None else _require_confidence(values["novelty"], field="novelty"),
+            novelty_status=_require_text(values.get("novelty_status", "unassessed"), field="novelty_status"),
+            source_run_ids=_string_list(values.get("source_run_ids"), field="source_run_ids"),
+            environment_summary=_optional_text(values.get("environment_summary"), field="environment_summary"),
             lifecycle_state=_require_text(values.get("lifecycle_state", "Candidate"), field="lifecycle_state"),
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateMergeProposedPayload(EvoPayload):
+    """A reviewable deduplication proposal; source candidates remain unchanged."""
+
+    cluster_id: str
+    scope: str
+    kind: str
+    candidate_ids: tuple[str, ...]
+    source_run_ids: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    task_features: tuple[str, ...]
+    similarity: float
+    proposal_summary: str
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "CandidateMergeProposedPayload":
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "cluster_id",
+                "scope",
+                "kind",
+                "candidate_ids",
+                "source_run_ids",
+                "evidence_refs",
+                "task_features",
+                "similarity",
+                "proposal_summary",
+            },
+        )
+        return cls(
+            cluster_id=_require_text(values.get("cluster_id"), field="cluster_id"),
+            scope=_require_text(values.get("scope"), field="scope"),
+            kind=_require_text(values.get("kind"), field="kind"),
+            candidate_ids=_string_list(values.get("candidate_ids"), field="candidate_ids"),
+            source_run_ids=_string_list(values.get("source_run_ids"), field="source_run_ids"),
+            evidence_refs=_string_list(values.get("evidence_refs"), field="evidence_refs"),
+            task_features=_string_list(values.get("task_features"), field="task_features"),
+            similarity=_require_confidence(values.get("similarity"), field="similarity"),
+            proposal_summary=_require_text(values.get("proposal_summary"), field="proposal_summary"),
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateConflictDetectedPayload(EvoPayload):
+    """An explicit conflicting-candidate group that requires later review."""
+
+    conflict_group_id: str
+    scope: str
+    candidate_ids: tuple[str, ...]
+    conclusions: tuple[str, ...]
+    source_run_ids: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    task_features: tuple[str, ...]
+    similarity: float
+    summary: str
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "CandidateConflictDetectedPayload":
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "conflict_group_id",
+                "scope",
+                "candidate_ids",
+                "conclusions",
+                "source_run_ids",
+                "evidence_refs",
+                "task_features",
+                "similarity",
+                "summary",
+            },
+        )
+        return cls(
+            conflict_group_id=_require_text(values.get("conflict_group_id"), field="conflict_group_id"),
+            scope=_require_text(values.get("scope"), field="scope"),
+            candidate_ids=_string_list(values.get("candidate_ids"), field="candidate_ids"),
+            conclusions=_string_list(values.get("conclusions"), field="conclusions"),
+            source_run_ids=_string_list(values.get("source_run_ids"), field="source_run_ids"),
+            evidence_refs=_string_list(values.get("evidence_refs"), field="evidence_refs"),
+            task_features=_string_list(values.get("task_features"), field="task_features"),
+            similarity=_require_confidence(values.get("similarity"), field="similarity"),
+            summary=_require_text(values.get("summary"), field="summary"),
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateReviewRecordedPayload(EvoPayload):
+    """A human review decision or metadata edit for an immutable Candidate."""
+
+    candidate_id: str
+    decision: str
+    reviewer: str
+    reason: str
+    scope: str | None = None
+    ttl_seconds: int | None = None
+    sensitivity: str | None = None
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "CandidateReviewRecordedPayload":
+        values, extensions = _payload_parts(raw, known={"candidate_id", "decision", "reviewer", "reason", "scope", "ttl_seconds", "sensitivity"})
+        decision = _require_text(values.get("decision"), field="decision")
+        if decision not in {"accept", "reject", "defer", "edit"}:
+            raise EvoEventError("decision must be accept, reject, defer, or edit")
+        ttl_seconds = _optional_int(values.get("ttl_seconds"), field="ttl_seconds")
+        if ttl_seconds is not None and ttl_seconds < 1:
+            raise EvoEventError("ttl_seconds must be positive when supplied")
+        sensitivity = _optional_text(values.get("sensitivity"), field="sensitivity")
+        if sensitivity is not None and sensitivity not in {"public", "internal", "restricted"}:
+            raise EvoEventError("sensitivity must be public, internal, or restricted")
+        return cls(
+            candidate_id=_require_text(values.get("candidate_id"), field="candidate_id"),
+            decision=decision,
+            reviewer=_require_text(values.get("reviewer"), field="reviewer"),
+            reason=_require_text(values.get("reason"), field="reason"),
+            scope=_optional_text(values.get("scope"), field="scope"),
+            ttl_seconds=ttl_seconds,
+            sensitivity=sensitivity,
             extensions=extensions,
         )
 
@@ -673,6 +832,9 @@ EvoEvent._payload_types = {
     "MemoryCreated": MemoryCreatedPayload,
     "MemoryUsed": MemoryUsedPayload,
     "ExperienceCandidateCreated": ExperienceCandidateCreatedPayload,
+    "CandidateMergeProposed": CandidateMergeProposedPayload,
+    "CandidateConflictDetected": CandidateConflictDetectedPayload,
+    "CandidateReviewRecorded": CandidateReviewRecordedPayload,
     "EvaluationCompleted": EvaluationCompletedPayload,
     "PromotionChanged": PromotionChangedPayload,
     "SelfModelUpdated": SelfModelUpdatedPayload,

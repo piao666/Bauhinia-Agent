@@ -229,7 +229,7 @@ def _json_summary(arguments: Mapping[str, object]) -> str:
         raw = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     except (TypeError, ValueError) as error:
         raise EvidenceError(f"tool arguments must be JSON-compatible: {error}") from error
-    return _redact_text(raw)[0]
+    return redact_text(raw)[0]
 
 
 def _redact_fields(**fields: str | None) -> dict[str, str | bool | None]:
@@ -238,14 +238,18 @@ def _redact_fields(**fields: str | None) -> dict[str, str | bool | None]:
     for name, value in fields.items():
         if value is not None and not isinstance(value, str):
             raise EvidenceError(f"{name} must be a string or null")
-        sanitized, changed = _redact_text(value) if value is not None else (None, False)
+        sanitized, changed = redact_text(value) if value is not None else (None, False)
         result[name] = sanitized
         was_redacted = was_redacted or changed
     result["redacted"] = was_redacted
     return result
 
 
-def _redact_text(value: str) -> tuple[str, bool]:
+def redact_text(value: str) -> tuple[str, bool]:
+    """Redact common credential forms before a new Evo record is persisted."""
+
+    if not isinstance(value, str):
+        raise EvidenceError("value must be a string")
     redacted = _BEARER_RE.sub(lambda match: f"{match.group(1)}: Bearer [REDACTED]", value)
     redacted = _NAMED_SECRET_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted)
     redacted = _OPENAI_KEY_RE.sub("[REDACTED]", redacted)

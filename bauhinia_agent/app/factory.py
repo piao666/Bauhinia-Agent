@@ -226,6 +226,7 @@ def create_bauhinia_agent_app(
         request_options=_main_request_options(selected_profile),
         context_window=selected_profile.context_window if selected_profile is not None else None,
         background_manager=background_manager,
+        evolution_enabled=True,
     )
     context_handler = ContextCommandHandler(
         session=current,
