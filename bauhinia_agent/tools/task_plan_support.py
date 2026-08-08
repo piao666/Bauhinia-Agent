@@ -61,12 +61,13 @@ def execute_task_plan_mutation(
         message = command_error_message(error) if command_error_message is not None else str(error)
         return make_error_result(tool_name, message)
 
-    return make_text_result(
-        tool_name,
-        f"Task plan revision {mutation.plan.revision}",
-        revision=mutation.plan.revision,
-        changed=mutation.changed,
-        changes=[dict(change) for change in mutation.changes],
-        snapshot=mutation.plan.to_dict(),
-        projection=mutation.projection,
-    )
+    data: dict[str, object] = {
+        "revision": mutation.plan.revision,
+        "changed": mutation.changed,
+        "changes": [dict(change) for change in mutation.changes],
+        "snapshot": mutation.plan.to_dict(),
+        "projection": mutation.projection,
+    }
+    if mutation.evo_diagnostic is not None:
+        data["evo_diagnostic"] = mutation.evo_diagnostic
+    return make_text_result(tool_name, f"Task plan revision {mutation.plan.revision}", **data)

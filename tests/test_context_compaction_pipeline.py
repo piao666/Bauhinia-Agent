@@ -107,18 +107,9 @@ def _request(
     **kwargs,
 ) -> CompactionRequest:
     if estimate_tokens is None:
-        estimate_tokens = lambda candidate: sum(
-            estimate_text_tokens(part.content)
-            for message in candidate.messages
-            for part in message.parts
-        )
+        estimate_tokens = lambda candidate: sum(estimate_text_tokens(part.content) for message in candidate.messages for part in message.parts)
     if consumed_tool_result_part_ids is None:
-        consumed_tool_result_part_ids = frozenset(
-            part.id
-            for message in view.messages
-            for part in message.parts
-            if part.kind == "tool_result"
-        )
+        consumed_tool_result_part_ids = frozenset(part.id for message in view.messages for part in message.parts if part.kind == "tool_result")
     return CompactionRequest(
         view=view,
         active_task_hash=active_task_hash,
@@ -186,11 +177,7 @@ def test_unconsumed_derived_result_is_not_l2_or_l3_candidate(tmp_path) -> None:
     view, part = _derived_tool_result_view(content="FAILED\n" + "x" * 8_000)
 
     def estimate(candidate: SessionView) -> int:
-        return sum(
-            estimate_text_tokens(item.content)
-            for message in candidate.messages
-            for item in message.parts
-        )
+        return sum(estimate_text_tokens(item.content) for message in candidate.messages for item in message.parts)
 
     protected = CompactionPipeline(root=tmp_path).compact(
         _request(

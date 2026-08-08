@@ -149,11 +149,7 @@ class ToolExecutor:
         while index < len(tool_calls):
             self._check_cancelled()
             tool_call = tool_calls[index]
-            validation_error = (
-                self._validate_tool_call(tool_call)
-                if self._validate_tool_call is not None
-                else None
-            )
+            validation_error = self._validate_tool_call(tool_call) if self._validate_tool_call is not None else None
             if validation_error is not None:
                 self._emit_event("denied", tool_call, result=validation_error)
                 self._record_result(tool_call, validation_error, state=state)

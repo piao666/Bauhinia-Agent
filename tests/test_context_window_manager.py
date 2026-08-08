@@ -150,22 +150,13 @@ def _compact_request(
 ) -> ContextCompactRequest:
     if estimate_budget is None:
         if estimate_tokens is not None:
-            estimate_budget = lambda candidate: _budget(
-                input_tokens=estimate_tokens(candidate)
-            )
+            estimate_budget = lambda candidate: _budget(input_tokens=estimate_tokens(candidate))
         else:
             estimate_budget = lambda candidate: _budget(
                 input_tokens=(
                     estimated_tokens
                     if estimated_tokens is not None
-                    else 30
-                    if candidate.checkpoints
-                    or any(
-                        part.content == "short"
-                        for message in candidate.messages
-                        for part in message.parts
-                    )
-                    else 100
+                    else 30 if candidate.checkpoints or any(part.content == "short" for message in candidate.messages for part in message.parts) else 100
                 )
             )
     return ContextCompactRequest(
@@ -227,14 +218,10 @@ def test_manager_fails_without_l4_when_fixed_context_exceeds_low_watermark(tmp_p
 def test_manager_reports_unconsumed_result_when_input_exceeds_capacity(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "content"))
-    l4 = FakeL4(
-        _l4_result(status="failed", failure_reason="unconsumed_boundary")
-    )
+    l4 = FakeL4(_l4_result(status="failed", failure_reason="unconsumed_boundary"))
     manager = ContextWindowManager(
         store=store,
-        pipeline=FakePipeline(
-            _programmatic_result(view, before_tokens=30_000, after_tokens=28_000)
-        ),
+        pipeline=FakePipeline(_programmatic_result(view, before_tokens=30_000, after_tokens=28_000)),
         l4_service=l4,
     )
     over_capacity = _budget(input_tokens=28_000)

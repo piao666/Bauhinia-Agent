@@ -39,15 +39,8 @@ class TestRunCommand:
     @pytest.mark.skipif(os.name == "nt", reason="进程组断言使用 POSIX 进程组语义")
     def test_timeout_kills_process_group_and_collects_partial_output(self, tmp_path):
         marker = tmp_path / "grandchild-survived"
-        child_code = (
-            "import pathlib, time; time.sleep(0.5); "
-            f"pathlib.Path({str(marker)!r}).write_text('survived')"
-        )
-        command = (
-            f"printf 'before-timeout\\n'; "
-            f"{sys.executable} -c \"{child_code}\" & "
-            "wait"
-        )
+        child_code = "import pathlib, time; time.sleep(0.5); " f"pathlib.Path({str(marker)!r}).write_text('survived')"
+        command = f"printf 'before-timeout\\n'; " f'{sys.executable} -c "{child_code}" & ' "wait"
 
         result = run_command(command, cwd=tmp_path, timeout_seconds=0.1, shell=True)
 
@@ -61,7 +54,9 @@ class TestRunCommand:
         result = run_command(["missing_cmd"], cwd=tmp_path)
 
         assert result.ok is False
-        assert "No such file or directory" in result.error
+        assert result.error is not None
+        assert "命令执行失败" in result.error
+        assert "No such file or directory" in result.error or "WinError 2" in result.error
 
     def test_stdout_truncation(self, tmp_path):
         result = run_command([sys.executable, "-c", "print('abcdefghij', end='')"], cwd=tmp_path, max_output_chars=5)

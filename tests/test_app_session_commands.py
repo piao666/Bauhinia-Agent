@@ -11,9 +11,9 @@ from bauhinia_agent.context.token_budget import build_context_budget
 
 
 def _context_budget(view):
-    return build_context_budget(
-        messages=[], tools=[], context_window=32_768, max_output_tokens=4_096
-    )
+    return build_context_budget(messages=[], tools=[], context_window=32_768, max_output_tokens=4_096)
+
+
 from bauhinia_agent.context.writer import SessionEventWriter
 from bauhinia_agent.planning.models import Task, TaskPlan
 from bauhinia_agent.session.catalog import SessionCatalog

@@ -53,12 +53,7 @@ def _request(
     **kwargs,
 ) -> LlmCompactRequest:
     if consumed_tool_result_part_ids is None:
-        consumed_tool_result_part_ids = frozenset(
-            part.id
-            for message in view.messages
-            for part in message.parts
-            if part.kind == "tool_result"
-        )
+        consumed_tool_result_part_ids = frozenset(part.id for message in view.messages for part in message.parts if part.kind == "tool_result")
     return LlmCompactRequest(
         view=view,
         runtime_state=runtime_state,

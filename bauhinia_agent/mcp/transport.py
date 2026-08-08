@@ -78,14 +78,19 @@ class _SdkMcpTransport:
     async def list_tools(self) -> tuple[McpToolDescription, ...]:
         session = self._require_session()
         result = await session.list_tools()
-        return tuple(
-            McpToolDescription(
-                name=tool.name,
-                description=tool.description,
-                input_schema=dict(tool.inputSchema),
+        descriptions: list[McpToolDescription] = []
+        for tool in result.tools:
+            input_schema = getattr(tool, "inputSchema", None)
+            if input_schema is None:
+                input_schema = getattr(tool, "input_schema", {})
+            descriptions.append(
+                McpToolDescription(
+                    name=tool.name,
+                    description=tool.description,
+                    input_schema=dict(input_schema),
+                )
             )
-            for tool in result.tools
-        )
+        return tuple(descriptions)
 
     async def call_tool(self, name: str, arguments: dict[str, object]) -> object:
         return await self._require_session().call_tool(name, arguments)

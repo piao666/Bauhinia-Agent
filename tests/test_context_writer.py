@@ -153,11 +153,7 @@ def test_session_records_only_new_consumed_part_ids(tmp_path) -> None:
             model="fake-model",
         )
 
-    events = [
-        event
-        for event in session.store.list_events("sess_test")
-        if event.type == "provider_projection_consumed"
-    ]
+    events = [event for event in session.store.list_events("sess_test") if event.type == "provider_projection_consumed"]
     assert len(events) == 1
     assert session.runtime_state.consumed_tool_result_part_ids == {"part_a", "part_b"}
 

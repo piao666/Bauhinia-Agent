@@ -370,9 +370,7 @@ class FakeSession:
 
 
 def _context_budget(view):
-    return build_context_budget(
-        messages=[], tools=[], context_window=32_768, max_output_tokens=4_096
-    )
+    return build_context_budget(messages=[], tools=[], context_window=32_768, max_output_tokens=4_096)
 
 
 def test_bauhinia_agent_app_can_be_created_with_command_handler() -> None:
@@ -1302,9 +1300,7 @@ async def test_bauhinia_agent_app_resume_picker_replays_selected_session_history
     writer_one.append_user_message("旧问题")
     writer_one.append_assistant_response(ChatResponse(provider="fake", model="fake", content="旧回答"))
     tool_call = ToolCall(id="call_resume", name="grep", arguments={"pattern": "needle"})
-    writer_one.append_assistant_response(
-        ChatResponse(provider="fake", model="fake", content="", tool_calls=[tool_call])
-    )
+    writer_one.append_assistant_response(ChatResponse(provider="fake", model="fake", content="", tool_calls=[tool_call]))
     writer_one.append_tool_result(
         tool_call=tool_call,
         result=ToolResult(name="grep", ok=True, content="result " + "x" * 300),

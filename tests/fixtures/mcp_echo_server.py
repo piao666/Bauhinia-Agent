@@ -1,6 +1,9 @@
 """用于 MCP 集成测试的最小 stdio echo 服务端。"""
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ImportError:  # MCP SDK 2.x
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
 server = FastMCP("bauhinia_agent-integration-echo")
 

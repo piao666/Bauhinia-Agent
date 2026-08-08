@@ -122,16 +122,9 @@ class ContextWindowManager:
         )
         if trigger == ContextWindowTrigger.AUTO and not decision.should_compact:
             return self._unchanged("skipped", "under_threshold", request, before_tokens)
-        if (
-            trigger == ContextWindowTrigger.AUTO
-            and mode == ContextCompactMode.AUTO
-            and auto_compact_circuit_is_open(request.runtime_state)
-        ):
+        if trigger == ContextWindowTrigger.AUTO and mode == ContextCompactMode.AUTO and auto_compact_circuit_is_open(request.runtime_state):
             return self._unchanged("skipped", "circuit_open", request, before_tokens)
-        if (
-            trigger == ContextWindowTrigger.AUTO
-            and request.runtime_state.last_no_effect_compaction_fingerprint == input_fingerprint
-        ):
+        if trigger == ContextWindowTrigger.AUTO and request.runtime_state.last_no_effect_compaction_fingerprint == input_fingerprint:
             return self._unchanged("skipped", "skipped_no_effect", request, before_tokens)
 
         target_tokens = _target_tokens(request, trigger)
@@ -145,9 +138,7 @@ class ContextWindowManager:
                 final_failure_reason="fixed_context_over_budget",
             )
 
-        required_levels: tuple[Literal["l1", "l2", "l3"], ...] = (
-            ("l2", "l3") if trigger == ContextWindowTrigger.TASK_HASH_CHANGED else ()
-        )
+        required_levels: tuple[Literal["l1", "l2", "l3"], ...] = ("l2", "l3") if trigger == ContextWindowTrigger.TASK_HASH_CHANGED else ()
         programmatic = self.pipeline.compact(
             CompactionRequest(
                 view=request.view,
@@ -155,9 +146,7 @@ class ContextWindowManager:
                 target_tokens=target_tokens,
                 current_turn=request.current_turn,
                 estimate_tokens=lambda candidate: request.estimate_budget(candidate).input_tokens,
-                consumed_tool_result_part_ids=frozenset(
-                    request.runtime_state.consumed_tool_result_part_ids
-                ),
+                consumed_tool_result_part_ids=frozenset(request.runtime_state.consumed_tool_result_part_ids),
                 required_levels=required_levels,
                 l2_result_target_tokens=self.config.l2_result_target_tokens,
                 force_route_current_text=_force_route_current_text_for_trigger(trigger),
@@ -222,9 +211,7 @@ class ContextWindowManager:
             l4_request=LlmCompactRequest(
                 view=programmatic.view,
                 runtime_state=request.runtime_state,
-                consumed_tool_result_part_ids=frozenset(
-                    request.runtime_state.consumed_tool_result_part_ids
-                ),
+                consumed_tool_result_part_ids=frozenset(request.runtime_state.consumed_tool_result_part_ids),
                 mode=mode.value,
             ),
             target_tokens=target_tokens,
@@ -345,9 +332,7 @@ class ContextWindowManager:
                     target_tokens=target_tokens,
                     current_turn=request.current_turn,
                     estimate_tokens=lambda candidate: request.estimate_budget(candidate).input_tokens,
-                    consumed_tool_result_part_ids=frozenset(
-                        request.runtime_state.consumed_tool_result_part_ids
-                    ),
+                    consumed_tool_result_part_ids=frozenset(request.runtime_state.consumed_tool_result_part_ids),
                     enabled_levels=("l1", "l2", "l3"),
                     required_levels=("l2", "l3") if trigger == ContextWindowTrigger.TASK_HASH_CHANGED else (),
                     l2_result_target_tokens=self.config.l2_result_target_tokens,
@@ -405,9 +390,7 @@ class ContextWindowManager:
                 l4_request=LlmCompactRequest(
                     view=current_programmatic.view,
                     runtime_state=request.runtime_state,
-                    consumed_tool_result_part_ids=frozenset(
-                        request.runtime_state.consumed_tool_result_part_ids
-                    ),
+                    consumed_tool_result_part_ids=frozenset(request.runtime_state.consumed_tool_result_part_ids),
                     mode=mode.value,
                     summary_mode="stronger",
                 ),

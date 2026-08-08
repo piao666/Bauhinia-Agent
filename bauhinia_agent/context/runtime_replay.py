@@ -26,11 +26,7 @@ def _apply_event(state: SessionRuntimeState, event: SessionEvent) -> None:
     if event.type == "provider_projection_consumed":
         part_ids = event.payload.get("part_ids")
         if isinstance(part_ids, list):
-            state.consumed_tool_result_part_ids.update(
-                part_id
-                for part_id in part_ids
-                if isinstance(part_id, str) and part_id
-            )
+            state.consumed_tool_result_part_ids.update(part_id for part_id in part_ids if isinstance(part_id, str) and part_id)
         return
 
     if event.type == "task_boundary_observed":
