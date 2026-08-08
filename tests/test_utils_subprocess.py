@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 import threading
@@ -36,18 +37,36 @@ class TestRunCommand:
         assert result.ok is False
         assert result.error == "命令执行超时"
 
-    @pytest.mark.skipif(os.name == "nt", reason="进程组断言使用 POSIX 进程组语义")
     def test_timeout_kills_process_group_and_collects_partial_output(self, tmp_path):
         marker = tmp_path / "grandchild-survived"
-        child_code = "import pathlib, time; time.sleep(0.5); " f"pathlib.Path({str(marker)!r}).write_text('survived')"
-        command = f"printf 'before-timeout\\n'; " f'{sys.executable} -c "{child_code}" & ' "wait"
+        child_code = "; ".join(
+            [
+                "import pathlib, time",
+                "time.sleep(0.8)",
+                f"pathlib.Path({str(marker)!r}).write_text('survived')",
+            ]
+        )
+        if os.name == "nt":
+            parent_code = "; ".join(
+                [
+                    "import subprocess, sys, time",
+                    f"subprocess.Popen([sys.executable, '-c', {child_code!r}])",
+                    "print('before-timeout', flush=True)",
+                    "time.sleep(999)",
+                ]
+            )
+            command: list[str] | str = [sys.executable, "-c", parent_code]
+            shell = False
+        else:
+            command = f"printf 'before-timeout\\n'; {shlex.quote(sys.executable)} -c {shlex.quote(child_code)} & wait"
+            shell = True
 
-        result = run_command(command, cwd=tmp_path, timeout_seconds=0.1, shell=True)
+        result = run_command(command, cwd=tmp_path, timeout_seconds=0.3, shell=shell)
 
         assert result.ok is False
         assert result.error == "命令执行超时"
         assert "before-timeout" in result.stdout
-        time.sleep(0.7)
+        time.sleep(1.0)
         assert not marker.exists()
 
     def test_os_error(self, tmp_path):

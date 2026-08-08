@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from bauhinia_agent.tools import create_builtin_registry
 from bauhinia_agent.tools.apply_patch import create_apply_patch_tool
 from bauhinia_agent.tools.delete import create_delete_tool
@@ -276,18 +280,17 @@ def test_delete_rejects_project_root(tmp_path):
     assert tmp_path.exists()
 
 
-import sys
-
-import pytest
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows 非管理员账户创建符号链接受限，平台行为差异大")
 def test_delete_treats_symlink_as_file_and_unlinks_it(tmp_path):
     """delete 工具对符号链接使用 unlink，只删除链接本身而不递归到目标。"""
     real_file = tmp_path / "real.txt"
     real_file.write_text("target content", encoding="utf-8")
     symlink = tmp_path / "link.txt"
-    symlink.symlink_to(real_file)
+    try:
+        symlink.symlink_to(real_file)
+    except OSError as exc:
+        if sys.platform == "win32" and getattr(exc, "winerror", None) in {5, 1314}:
+            pytest.skip(f"当前 Windows 环境不允许创建符号链接：WinError {exc.winerror}")
+        raise
     registry = create_builtin_registry(tmp_path, include_mutation_tools=True)
 
     result = registry.execute("delete", {"path": "link.txt"})
