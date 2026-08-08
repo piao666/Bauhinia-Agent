@@ -18,6 +18,7 @@ from bauhinia_agent.memory.models import (
     MemoryStatus,
 )
 from bauhinia_agent.memory.service import MemoryService, MemoryWriteDisabledError
+from bauhinia_agent.memory.retrieval import ContextPack, MemoryRetriever, QuerySignature, RetrievalHit
 
 __all__ = [
     "MEMORY_LAYER_RULES",
@@ -34,4 +35,8 @@ __all__ = [
     "MemoryStatus",
     "MemoryService",
     "MemoryWriteDisabledError",
+    "ContextPack",
+    "MemoryRetriever",
+    "QuerySignature",
+    "RetrievalHit",
 ]

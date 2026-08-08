@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "black>=25,<27"]
 
 [project.scripts]
 bauhinia-agent = "bauhinia_agent.cli:main"
