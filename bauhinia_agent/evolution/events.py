@@ -66,6 +66,14 @@ def _require_non_negative_int(value: object, *, field: str) -> int:
     return value
 
 
+def _optional_int(value: object, *, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise EvoEventError(f"{field} must be an integer or null")
+    return value
+
+
 def _require_sequence(value: object, *, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise EvoEventError(f"{field} must be a positive integer")
@@ -227,17 +235,41 @@ class EvidenceRecordedPayload(EvoPayload):
     summary: str
     locator: str | None = None
     verified: bool = False
+    command: str | None = None
+    input_summary: str | None = None
+    cwd: str | None = None
+    exit_code: int | None = None
+    redacted: bool = False
     extensions: dict[str, object] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_dict(cls, raw: object) -> "EvidenceRecordedPayload":
-        values, extensions = _payload_parts(raw, known={"evidence_type", "source", "summary", "locator", "verified"})
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "evidence_type",
+                "source",
+                "summary",
+                "locator",
+                "verified",
+                "command",
+                "input_summary",
+                "cwd",
+                "exit_code",
+                "redacted",
+            },
+        )
         return cls(
             evidence_type=_require_text(values.get("evidence_type"), field="evidence_type"),
             source=_require_text(values.get("source"), field="source"),
             summary=_require_text(values.get("summary"), field="summary"),
             locator=_optional_text(values.get("locator"), field="locator"),
             verified=_require_bool(values.get("verified", False), field="verified"),
+            command=_optional_text(values.get("command"), field="command"),
+            input_summary=_optional_text(values.get("input_summary"), field="input_summary"),
+            cwd=_optional_text(values.get("cwd"), field="cwd"),
+            exit_code=_optional_int(values.get("exit_code"), field="exit_code"),
+            redacted=_require_bool(values.get("redacted", False), field="redacted"),
             extensions=extensions,
         )
 
@@ -248,16 +280,18 @@ class OutcomeClassifiedPayload(EvoPayload):
     category: str
     summary: str
     evidence_refs: tuple[str, ...] = ()
+    confidence: float = 0.0
     extensions: dict[str, object] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_dict(cls, raw: object) -> "OutcomeClassifiedPayload":
-        values, extensions = _payload_parts(raw, known={"outcome", "category", "summary", "evidence_refs"})
+        values, extensions = _payload_parts(raw, known={"outcome", "category", "summary", "evidence_refs", "confidence"})
         return cls(
             outcome=_require_text(values.get("outcome"), field="outcome"),
             category=_require_text(values.get("category"), field="category"),
             summary=_require_text(values.get("summary"), field="summary"),
             evidence_refs=_string_list(values.get("evidence_refs"), field="evidence_refs"),
+            confidence=_require_confidence(values.get("confidence", 0.0)),
             extensions=extensions,
         )
 

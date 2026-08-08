@@ -30,6 +30,26 @@ from bauhinia_agent.evolution.identifiers import (
     new_evo_id,
     require_evo_id,
 )
+from bauhinia_agent.evolution.evidence import (
+    EvidenceAdapter,
+    EvidenceDiagnostic,
+    EvidenceError,
+    EvidenceInput,
+    EvidenceRecord,
+    EvidenceRecordResult,
+)
+from bauhinia_agent.evolution.outcomes import (
+    OutcomeClassifier,
+    OutcomeDiagnostic,
+    OutcomeError,
+    OutcomeRecord,
+    OutcomeResult,
+)
+from bauhinia_agent.evolution.diagnosis import (
+    CandidateCause,
+    DiagnosisService,
+    DiagnosisSummary,
+)
 from bauhinia_agent.evolution.store import (
     EvoAppendResult,
     EvoEventStore,
@@ -50,10 +70,19 @@ from bauhinia_agent.evolution.migration import (
 
 __all__ = [
     "DecisionRecordedPayload",
+    "CandidateCause",
+    "DiagnosisService",
+    "DiagnosisSummary",
     "EVO_EVENT_SCHEMA_VERSION",
     "EVO_EVENT_TYPES",
     "EvaluationCompletedPayload",
     "EvidenceRecordedPayload",
+    "EvidenceAdapter",
+    "EvidenceDiagnostic",
+    "EvidenceError",
+    "EvidenceInput",
+    "EvidenceRecord",
+    "EvidenceRecordResult",
     "EvoEvent",
     "EvoEventError",
     "EvoEventStore",
@@ -77,6 +106,11 @@ __all__ = [
     "MemoryCreatedPayload",
     "MemoryUsedPayload",
     "OutcomeClassifiedPayload",
+    "OutcomeClassifier",
+    "OutcomeDiagnostic",
+    "OutcomeError",
+    "OutcomeRecord",
+    "OutcomeResult",
     "PlanCreatedPayload",
     "PlanNodeUpdatedPayload",
     "PromotionChangedPayload",
