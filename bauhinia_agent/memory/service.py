@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
+from typing import Callable
 
 from bauhinia_agent.evolution import EvoEvent, EvoEventStore, EvoReferences, MemoryCreatedPayload, new_evo_id
 from bauhinia_agent.memory.models import MemoryModelError, MemoryRecord
@@ -18,10 +19,18 @@ class MemoryWriteDisabledError(MemoryModelError):
 class MemoryService:
     """Writes source events and rebuilds deterministic in-memory projections."""
 
-    def __init__(self, *, store: EvoEventStore, project_id: str, writes_enabled: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        store: EvoEventStore,
+        project_id: str,
+        writes_enabled: bool = True,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self._store = store
         self._project_id = project_id
         self._writes_enabled = writes_enabled
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     @property
     def writes_enabled(self) -> bool:
@@ -72,6 +81,6 @@ class MemoryService:
             if not record.is_readable_by(project_id=self._project_id, user_id=user_id, session_id=session_id):
                 continue
             score = len(terms.intersection(_WORDS.findall(record.content.lower())))
-            if score and record.freshness_weight(at=datetime.now(UTC)):
+            if score and record.freshness_weight(at=self._clock()):
                 scored.append((score, record))
         return [record for _, record in sorted(scored, key=lambda item: (-item[0], item[1].memory_id))]

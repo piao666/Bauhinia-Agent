@@ -23,8 +23,12 @@ def _record(memory_id: str, *, project: str = "project_a", user: str | None = No
 
 
 def test_memory_source_rebuild_and_deterministic_search(tmp_path) -> None:
-    service = MemoryService(store=EvoEventStore(tmp_path), project_id="project_a")
     created_at = datetime(2026, 8, 8, tzinfo=UTC)
+    service = MemoryService(
+        store=EvoEventStore(tmp_path),
+        project_id="project_a",
+        clock=lambda: created_at + timedelta(hours=1),
+    )
     service.create(_record("memory_b", created_at=created_at))
     service.create(_record("memory_a", created_at=created_at))
 

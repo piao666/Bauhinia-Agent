@@ -28,7 +28,7 @@ runs/
 data/
 .tools/
 docs/promo/
-docs/
+/docs/item_px/
 /evaluation/
 *.doc
 *.docx

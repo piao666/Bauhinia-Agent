@@ -30,6 +30,7 @@ from bauhinia_agent.evolution.events import (
     PlanCreatedPayload,
     PlanNodeUpdatedPayload,
     PromotionChangedPayload,
+    SelfModelObservationRecordedPayload,
     SelfModelUpdatedPayload,
     UnknownEvoPayload,
 )
@@ -252,6 +253,7 @@ __all__ = [
     "PromotionRecord",
     "PromotionResult",
     "SelfModelUpdatedPayload",
+    "SelfModelObservationRecordedPayload",
     "ShadowSuggestion",
     "ShadowTrialRecord",
     "ShadowTrialResult",

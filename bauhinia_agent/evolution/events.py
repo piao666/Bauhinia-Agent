@@ -38,6 +38,7 @@ EVO_EVENT_TYPES = frozenset(
         "EvaluationComparisonCompleted",
         "EvaluationCompleted",
         "PromotionChanged",
+        "SelfModelObservationRecorded",
         "SelfModelUpdated",
     }
 )
@@ -1112,6 +1113,66 @@ class SelfModelUpdatedPayload(EvoPayload):
 
 
 @dataclass(frozen=True, slots=True)
+class SelfModelObservationRecordedPayload(EvoPayload):
+    """Evidence-linked task observation used to rebuild Self Model profiles."""
+
+    project_id: str
+    model_config_hash: str
+    evaluator_version: str
+    environment_hash: str
+    language: str
+    repository_scale: str
+    task_type: str
+    tool_category: str
+    risk_level: str
+    verification_level: str
+    source_event_id: str
+    success: bool
+    outcome_category: str
+    verification_quality: float
+    cost: float | None
+    latency_ms: float | None
+    risk_event_count: int
+    evidence_refs: tuple[str, ...]
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "SelfModelObservationRecordedPayload":
+        known = {item.name for item in fields(cls) if item.name != "extensions"}
+        values, extensions = _payload_parts(raw, known=known)
+        repository_scale = _require_text(values.get("repository_scale"), field="repository_scale")
+        if repository_scale not in {"small", "medium", "large", "unknown"}:
+            raise EvoEventError("repository_scale must be small, medium, large, or unknown")
+        risk_level = _require_text(values.get("risk_level"), field="risk_level")
+        if risk_level not in {"low", "medium", "high", "unknown"}:
+            raise EvoEventError("risk_level must be low, medium, high, or unknown")
+        verification_level = _require_text(values.get("verification_level"), field="verification_level")
+        if verification_level not in {"none", "partial", "strong"}:
+            raise EvoEventError("verification_level must be none, partial, or strong")
+        return cls(
+            project_id=_require_text(values.get("project_id"), field="project_id"),
+            model_config_hash=_require_text(values.get("model_config_hash"), field="model_config_hash"),
+            evaluator_version=_require_text(values.get("evaluator_version"), field="evaluator_version"),
+            environment_hash=_require_text(values.get("environment_hash"), field="environment_hash"),
+            language=_require_text(values.get("language"), field="language"),
+            repository_scale=repository_scale,
+            task_type=_require_text(values.get("task_type"), field="task_type"),
+            tool_category=_require_text(values.get("tool_category"), field="tool_category"),
+            risk_level=risk_level,
+            verification_level=verification_level,
+            source_event_id=_require_text(values.get("source_event_id"), field="source_event_id"),
+            success=_require_bool(values.get("success"), field="success"),
+            outcome_category=_require_text(values.get("outcome_category"), field="outcome_category"),
+            verification_quality=_require_confidence(values.get("verification_quality"), field="verification_quality"),
+            cost=_optional_non_negative_number(values.get("cost"), field="cost"),
+            latency_ms=_optional_non_negative_number(values.get("latency_ms"), field="latency_ms"),
+            risk_event_count=_require_non_negative_int(values.get("risk_event_count"), field="risk_event_count"),
+            evidence_refs=_string_list(values.get("evidence_refs"), field="evidence_refs"),
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class UnknownEvoPayload(EvoPayload):
     """Payload for a future event type; raw fields remain inspectable."""
 
@@ -1341,5 +1402,6 @@ EvoEvent._payload_types = {
     "EvaluationComparisonCompleted": EvaluationComparisonCompletedPayload,
     "EvaluationCompleted": EvaluationCompletedPayload,
     "PromotionChanged": PromotionChangedPayload,
+    "SelfModelObservationRecorded": SelfModelObservationRecordedPayload,
     "SelfModelUpdated": SelfModelUpdatedPayload,
 }
