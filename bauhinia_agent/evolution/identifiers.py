@@ -13,9 +13,15 @@ IdentifierKind = Literal[
     "node",
     "memory",
     "candidate",
+    "artifact",
     "evidence",
     "evaluation",
     "promotion",
+    "shadow_trial",
+    "eval_case",
+    "eval_variant",
+    "eval_trial",
+    "corpus",
     "self_model",
 ]
 

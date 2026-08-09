@@ -7,6 +7,7 @@ lifecycle state; P6-002 and later phases own comparison and review workflows.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -130,10 +131,7 @@ class ExperienceCompiler:
         return [
             _candidate_from_event(event)
             for event in self._store.list_events()
-            if event.event_type == "ExperienceCandidateCreated"
-            and event.refs.run_id == run_id
-            and isinstance(event.payload, ExperienceCandidateCreatedPayload)
-            and event.refs.candidate_id is not None
+            if event.event_type == "ExperienceCandidateCreated" and event.refs.run_id == run_id and isinstance(event.payload, ExperienceCandidateCreatedPayload) and event.refs.candidate_id is not None
         ]
 
 
@@ -143,9 +141,7 @@ def _environment_summary(value: str) -> str:
     return redact_text(value)[0]
 
 
-def _source_events(
-    events: list[EvoEvent], run_id: str, evidence: list[EvidenceRecord], outcome: OutcomeRecord
-) -> tuple[EvoEvent, ...]:
+def _source_events(events: list[EvoEvent], run_id: str, evidence: list[EvidenceRecord], outcome: OutcomeRecord) -> tuple[EvoEvent, ...]:
     evidence_event_ids = {record.event_id for record in evidence}
     selected: list[EvoEvent] = []
     for event in events:
@@ -188,13 +184,13 @@ def _candidate_payload(
             "outcome_category": outcome.payload.category,
             "diagnosis_confidence": diagnosis.confidence,
             "candidate_limit": "single-run draft; not eligible for retrieval or promotion",
+            "task_signature": _task_signature(goal, action),
+            "pattern_key": _pattern_key(action, goal),
         },
     )
 
 
-def _candidate_text(
-    outcome: OutcomeRecord, diagnosis: DiagnosisSummary, goal: str | None, action: str | None
-) -> tuple[str, str, str, tuple[str, ...]]:
+def _candidate_text(outcome: OutcomeRecord, diagnosis: DiagnosisSummary, goal: str | None, action: str | None) -> tuple[str, str, str, tuple[str, ...]]:
     context = action or goal or "the recorded run"
     if outcome.payload.category == "task_success":
         return (
@@ -232,6 +228,21 @@ def _latest_action(events: tuple[EvoEvent, ...]) -> str | None:
         if isinstance(event.payload, DecisionRecordedPayload):
             return redact_text(event.payload.selected_action)[0]
     return None
+
+
+def _task_signature(goal: str | None, action: str | None) -> str:
+    if goal is None and action is None:
+        return "unknown"
+    return _fingerprint("task", goal or "", action or "")
+
+
+def _pattern_key(action: str | None, goal: str | None) -> str:
+    return _fingerprint("pattern", action or goal or "unspecified")
+
+
+def _fingerprint(*parts: str) -> str:
+    normalized = "\x1f".join(" ".join(part.lower().split()) for part in parts)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
 
 
 def _candidate_from_event(event: EvoEvent[ExperienceCandidateCreatedPayload]) -> ExperienceCandidate:

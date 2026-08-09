@@ -45,6 +45,8 @@ def test_compiler_creates_traceable_plan_template_from_verified_success(tmp_path
         outcome.outcome.event_id,
     )
     assert candidate.payload.source_run_ids == (run_id,)
+    assert candidate.payload.extensions["task_signature"] != "unknown"
+    assert candidate.payload.extensions["pattern_key"]
     assert candidate.candidate_id.startswith("candidate_")
     assert ExperienceCompiler(store).list_for_run(run_id) == [candidate]
     assert all(event.event_type not in {"MemoryCreated", "PromotionChanged"} for event in store.list_events())
@@ -91,9 +93,7 @@ def test_compiler_refuses_to_create_candidate_without_evidence_or_outcome(tmp_pa
 def test_compiler_reports_recorder_failure_without_changing_source_run(tmp_path) -> None:
     source_store = EvoEventStore(tmp_path / ".bauhinia-agent")
     run_id = new_evo_id("run")
-    EvidenceAdapter(source_store).record(
-        EvidenceInput(run_id=run_id, evidence_type="test", source="pytest", summary="1 passed", exit_code=0, verified=True)
-    )
+    EvidenceAdapter(source_store).record(EvidenceInput(run_id=run_id, evidence_type="test", source="pytest", summary="1 passed", exit_code=0, verified=True))
     OutcomeClassifier(source_store).classify(run_id)
     result = ExperienceCompiler(_FailingStore(source_store.list_events())).compile(run_id, environment_summary="Windows")
 

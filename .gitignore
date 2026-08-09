@@ -29,7 +29,7 @@ data/
 .tools/
 docs/promo/
 docs/
-evaluation/
+/evaluation/
 *.doc
 *.docx
 *.docm

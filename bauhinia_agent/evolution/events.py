@@ -27,9 +27,15 @@ EVO_EVENT_TYPES = frozenset(
         "MemoryCreated",
         "MemoryUsed",
         "ExperienceCandidateCreated",
+        "CandidateArtifactCreated",
+        "CandidateShadowTrialRecorded",
+        "CandidateArtifactControlChanged",
         "CandidateMergeProposed",
         "CandidateConflictDetected",
         "CandidateReviewRecorded",
+        "EvaluationCorpusRegistered",
+        "EvaluationTrialRecorded",
+        "EvaluationComparisonCompleted",
         "EvaluationCompleted",
         "PromotionChanged",
         "SelfModelUpdated",
@@ -75,6 +81,21 @@ def _optional_int(value: object, *, field: str) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         raise EvoEventError(f"{field} must be an integer or null")
     return value
+
+
+def _optional_non_negative_number(value: object, *, field: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or float(value) < 0:
+        raise EvoEventError(f"{field} must be a non-negative number or null")
+    return float(value)
+
+
+def _require_non_negative_number(value: object, *, field: str) -> float:
+    result = _optional_non_negative_number(value, field=field)
+    if result is None:
+        raise EvoEventError(f"{field} must be a non-negative number")
+    return result
 
 
 def _require_sequence(value: object, *, field: str) -> int:
@@ -398,6 +419,231 @@ class ExperienceCandidateCreatedPayload(EvoPayload):
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateArtifactCreatedPayload(EvoPayload):
+    """A versioned, non-operative artifact derived from reviewed experience."""
+
+    artifact_schema_version: str
+    lineage_id: str
+    artifact_version: int
+    kind: str
+    name: str
+    description: str
+    instructions: str
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    dependencies: tuple[str, ...]
+    effects: tuple[str, ...]
+    triggers: tuple[str, ...]
+    scope: str
+    applicability: str
+    risks: tuple[str, ...]
+    source_candidate_ids: tuple[str, ...]
+    support_candidate_ids: tuple[str, ...]
+    counterexample_candidate_ids: tuple[str, ...]
+    source_run_ids: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    counterexamples: tuple[str, ...]
+    confidence: float
+    content_hash: str
+    lifecycle_state: str = "Candidate"
+    supersedes_artifact_id: str | None = None
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "CandidateArtifactCreatedPayload":
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "artifact_schema_version",
+                "lineage_id",
+                "artifact_version",
+                "kind",
+                "name",
+                "description",
+                "instructions",
+                "inputs",
+                "outputs",
+                "dependencies",
+                "effects",
+                "triggers",
+                "scope",
+                "applicability",
+                "risks",
+                "source_candidate_ids",
+                "support_candidate_ids",
+                "counterexample_candidate_ids",
+                "source_run_ids",
+                "evidence_refs",
+                "counterexamples",
+                "confidence",
+                "content_hash",
+                "lifecycle_state",
+                "supersedes_artifact_id",
+            },
+        )
+        version = _require_non_negative_int(values.get("artifact_version"), field="artifact_version")
+        if version < 1:
+            raise EvoEventError("artifact_version must be positive")
+        source_candidate_ids = _string_list(values.get("source_candidate_ids"), field="source_candidate_ids")
+        return cls(
+            artifact_schema_version=_require_text(values.get("artifact_schema_version"), field="artifact_schema_version"),
+            lineage_id=_require_text(values.get("lineage_id"), field="lineage_id"),
+            artifact_version=version,
+            kind=_require_text(values.get("kind"), field="kind"),
+            name=_require_text(values.get("name"), field="name"),
+            description=_require_text(values.get("description"), field="description"),
+            instructions=_require_text(values.get("instructions"), field="instructions"),
+            inputs=_string_list(values.get("inputs"), field="inputs"),
+            outputs=_string_list(values.get("outputs"), field="outputs"),
+            dependencies=_string_list(values.get("dependencies"), field="dependencies"),
+            effects=_string_list(values.get("effects"), field="effects"),
+            triggers=_string_list(values.get("triggers"), field="triggers"),
+            scope=_require_text(values.get("scope"), field="scope"),
+            applicability=_require_text(values.get("applicability"), field="applicability"),
+            risks=_string_list(values.get("risks"), field="risks"),
+            source_candidate_ids=source_candidate_ids,
+            support_candidate_ids=_string_list(
+                values.get("support_candidate_ids"),
+                field="support_candidate_ids",
+                default=source_candidate_ids,
+            ),
+            counterexample_candidate_ids=_string_list(values.get("counterexample_candidate_ids"), field="counterexample_candidate_ids"),
+            source_run_ids=_string_list(values.get("source_run_ids"), field="source_run_ids"),
+            evidence_refs=_string_list(values.get("evidence_refs"), field="evidence_refs"),
+            counterexamples=_string_list(values.get("counterexamples"), field="counterexamples"),
+            confidence=_require_confidence(values.get("confidence")),
+            content_hash=_require_text(values.get("content_hash"), field="content_hash"),
+            lifecycle_state=_require_text(values.get("lifecycle_state", "Candidate"), field="lifecycle_state"),
+            supersedes_artifact_id=_optional_text(values.get("supersedes_artifact_id"), field="supersedes_artifact_id"),
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateShadowTrialRecordedPayload(EvoPayload):
+    """An offline suggestion or Shadow comparison with no real effects."""
+
+    trial_id: str
+    artifact_id: str
+    artifact_version: int
+    mode: str
+    task_input_hash: str
+    workspace_baseline_hash: str
+    environment_hash: str
+    baseline_summary: str
+    candidate_summary: str
+    evidence_refs: tuple[str, ...]
+    passed: bool
+    real_effects_applied: bool = False
+    failure_reason: str | None = None
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "CandidateShadowTrialRecordedPayload":
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "trial_id",
+                "artifact_id",
+                "artifact_version",
+                "mode",
+                "task_input_hash",
+                "workspace_baseline_hash",
+                "environment_hash",
+                "baseline_summary",
+                "candidate_summary",
+                "evidence_refs",
+                "passed",
+                "real_effects_applied",
+                "failure_reason",
+            },
+        )
+        version = _require_non_negative_int(values.get("artifact_version"), field="artifact_version")
+        if version < 1:
+            raise EvoEventError("artifact_version must be positive")
+        mode = _require_text(values.get("mode"), field="mode")
+        if mode not in {"suggestion", "shadow"}:
+            raise EvoEventError("mode must be suggestion or shadow")
+        real_effects_applied = _require_bool(values.get("real_effects_applied", False), field="real_effects_applied")
+        if real_effects_applied:
+            raise EvoEventError("Shadow trials cannot apply real effects")
+        passed = _require_bool(values.get("passed"), field="passed")
+        failure_reason = _optional_text(values.get("failure_reason"), field="failure_reason")
+        if not passed and failure_reason is None:
+            raise EvoEventError("failed Shadow trials require failure_reason")
+        return cls(
+            trial_id=_require_text(values.get("trial_id"), field="trial_id"),
+            artifact_id=_require_text(values.get("artifact_id"), field="artifact_id"),
+            artifact_version=version,
+            mode=mode,
+            task_input_hash=_require_text(values.get("task_input_hash"), field="task_input_hash"),
+            workspace_baseline_hash=_require_text(values.get("workspace_baseline_hash"), field="workspace_baseline_hash"),
+            environment_hash=_require_text(values.get("environment_hash"), field="environment_hash"),
+            baseline_summary=_require_text(values.get("baseline_summary"), field="baseline_summary"),
+            candidate_summary=_require_text(values.get("candidate_summary"), field="candidate_summary"),
+            evidence_refs=_string_list(values.get("evidence_refs"), field="evidence_refs"),
+            passed=passed,
+            real_effects_applied=False,
+            failure_reason=failure_reason,
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateArtifactControlChangedPayload(EvoPayload):
+    """Append-only control of suggestion/Shadow availability, not promotion."""
+
+    artifact_id: str
+    artifact_version: int
+    action: str
+    reviewer: str
+    reason: str
+    evidence_refs: tuple[str, ...]
+    target_artifact_id: str | None = None
+    target_artifact_version: int | None = None
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "CandidateArtifactControlChangedPayload":
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "artifact_id",
+                "artifact_version",
+                "action",
+                "reviewer",
+                "reason",
+                "evidence_refs",
+                "target_artifact_id",
+                "target_artifact_version",
+            },
+        )
+        version = _require_non_negative_int(values.get("artifact_version"), field="artifact_version")
+        if version < 1:
+            raise EvoEventError("artifact_version must be positive")
+        action = _require_text(values.get("action"), field="action")
+        if action not in {"disable_shadow", "resume_shadow", "rollback_shadow"}:
+            raise EvoEventError("unsupported Artifact control action")
+        target_version = _optional_int(values.get("target_artifact_version"), field="target_artifact_version")
+        if target_version is not None and target_version < 1:
+            raise EvoEventError("target_artifact_version must be positive")
+        target_id = _optional_text(values.get("target_artifact_id"), field="target_artifact_id")
+        if action == "rollback_shadow" and (target_id is None or target_version is None):
+            raise EvoEventError("rollback_shadow requires a target Artifact and version")
+        return cls(
+            artifact_id=_require_text(values.get("artifact_id"), field="artifact_id"),
+            artifact_version=version,
+            action=action,
+            reviewer=_require_text(values.get("reviewer"), field="reviewer"),
+            reason=_require_text(values.get("reason"), field="reason"),
+            evidence_refs=_string_list(values.get("evidence_refs"), field="evidence_refs"),
+            target_artifact_id=target_id,
+            target_artifact_version=target_version,
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class CandidateMergeProposedPayload(EvoPayload):
     """A reviewable deduplication proposal; source candidates remain unchanged."""
 
@@ -525,6 +771,255 @@ class CandidateReviewRecordedPayload(EvoPayload):
 
 
 @dataclass(frozen=True, slots=True)
+class EvaluationCorpusRegisteredPayload(EvoPayload):
+    """Immutable, licensed Corpus manifest metadata without private answers."""
+
+    corpus_schema_version: str
+    corpus_id: str
+    corpus_version: str
+    license_spdx: str
+    provenance: str
+    case_ids: tuple[str, ...]
+    case_splits: tuple[str, ...]
+    task_input_hashes: tuple[str, ...]
+    workspace_baseline_hashes: tuple[str, ...]
+    environment_hashes: tuple[str, ...]
+    private_reference_hashes: tuple[str, ...]
+    case_manifest_hashes: tuple[str, ...]
+    manifest_hash: str
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "EvaluationCorpusRegisteredPayload":
+        known = {item.name for item in fields(cls) if item.name != "extensions"}
+        values, extensions = _payload_parts(raw, known=known)
+        case_ids = _string_list(values.get("case_ids"), field="case_ids")
+        case_splits = _string_list(values.get("case_splits"), field="case_splits")
+        task_hashes = _string_list(values.get("task_input_hashes"), field="task_input_hashes")
+        workspace_hashes = _string_list(values.get("workspace_baseline_hashes"), field="workspace_baseline_hashes")
+        environment_hashes = _string_list(values.get("environment_hashes"), field="environment_hashes")
+        reference_hashes = _string_list(values.get("private_reference_hashes"), field="private_reference_hashes")
+        case_manifest_hashes = _string_list(values.get("case_manifest_hashes"), field="case_manifest_hashes")
+        lengths = {
+            len(case_ids),
+            len(case_splits),
+            len(task_hashes),
+            len(workspace_hashes),
+            len(environment_hashes),
+            len(reference_hashes),
+            len(case_manifest_hashes),
+        }
+        if lengths != {len(case_ids)} or not case_ids:
+            raise EvoEventError("Corpus case manifest fields must be non-empty parallel lists")
+        if any(split not in {"source", "development", "held_out"} for split in case_splits):
+            raise EvoEventError("Corpus case_splits contain an unsupported split")
+        return cls(
+            corpus_schema_version=_require_text(values.get("corpus_schema_version"), field="corpus_schema_version"),
+            corpus_id=_require_text(values.get("corpus_id"), field="corpus_id"),
+            corpus_version=_require_text(values.get("corpus_version"), field="corpus_version"),
+            license_spdx=_require_text(values.get("license_spdx"), field="license_spdx"),
+            provenance=_require_text(values.get("provenance"), field="provenance"),
+            case_ids=case_ids,
+            case_splits=case_splits,
+            task_input_hashes=task_hashes,
+            workspace_baseline_hashes=workspace_hashes,
+            environment_hashes=environment_hashes,
+            private_reference_hashes=reference_hashes,
+            case_manifest_hashes=case_manifest_hashes,
+            manifest_hash=_require_text(values.get("manifest_hash"), field="manifest_hash"),
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationTrialRecordedPayload(EvoPayload):
+    """One fixed, repeatable evaluator attempt represented as a standard Run."""
+
+    evaluation_schema_version: str
+    trial_id: str
+    trial_key: str
+    attempt: int
+    case_id: str
+    corpus_id: str
+    corpus_version: str
+    split: str
+    variant_id: str
+    variant_kind: str
+    artifact_id: str | None
+    artifact_version: int | None
+    evaluator_version: str
+    seed: int
+    task_input_hash: str
+    workspace_baseline_hash: str
+    environment_hash: str
+    model_config_hash: str
+    variant_hash: str
+    task_outcome: str
+    evaluation_status: str
+    success: bool | None
+    verification_quality: float | None
+    cost: float | None
+    latency_ms: float | None
+    risk_events: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    verification_commands: tuple[str, ...]
+    verification_skipped: bool
+    verification_coverage: float
+    claimed_success: bool | None
+    evidence_success: bool | None
+    output_truncated: bool
+    accessed_resource_hashes: tuple[str, ...]
+    invalid_reasons: tuple[str, ...] = ()
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "EvaluationTrialRecordedPayload":
+        known = {item.name for item in fields(cls) if item.name != "extensions"}
+        values, extensions = _payload_parts(raw, known=known)
+        attempt = _require_non_negative_int(values.get("attempt"), field="attempt")
+        if attempt < 1:
+            raise EvoEventError("attempt must be positive")
+        artifact_version = _optional_int(values.get("artifact_version"), field="artifact_version")
+        if artifact_version is not None and artifact_version < 1:
+            raise EvoEventError("artifact_version must be positive")
+        artifact_id = _optional_text(values.get("artifact_id"), field="artifact_id")
+        split = _require_text(values.get("split"), field="split")
+        if split not in {"source", "development", "held_out"}:
+            raise EvoEventError("split must be source, development, or held_out")
+        variant_kind = _require_text(values.get("variant_kind"), field="variant_kind")
+        if variant_kind not in {"baseline", "candidate"}:
+            raise EvoEventError("variant_kind must be baseline or candidate")
+        if variant_kind == "candidate" and (artifact_id is None or artifact_version is None):
+            raise EvoEventError("candidate Variants require artifact_id and artifact_version")
+        if variant_kind == "baseline" and (artifact_id is not None or artifact_version is not None):
+            raise EvoEventError("baseline Variants cannot reference an Artifact")
+        task_outcome = _require_text(values.get("task_outcome"), field="task_outcome")
+        if task_outcome not in {"task_success", "task_failure", "cancelled", "not_run"}:
+            raise EvoEventError("unsupported evaluation task_outcome")
+        evaluation_status = _require_text(values.get("evaluation_status"), field="evaluation_status")
+        if evaluation_status not in {"completed", "evaluator_failure", "invalid", "cancelled"}:
+            raise EvoEventError("unsupported evaluation_status")
+        success = values.get("success")
+        if success is not None:
+            success = _require_bool(success, field="success")
+        return cls(
+            evaluation_schema_version=_require_text(values.get("evaluation_schema_version"), field="evaluation_schema_version"),
+            trial_id=_require_text(values.get("trial_id"), field="trial_id"),
+            trial_key=_require_text(values.get("trial_key"), field="trial_key"),
+            attempt=attempt,
+            case_id=_require_text(values.get("case_id"), field="case_id"),
+            corpus_id=_require_text(values.get("corpus_id"), field="corpus_id"),
+            corpus_version=_require_text(values.get("corpus_version"), field="corpus_version"),
+            split=split,
+            variant_id=_require_text(values.get("variant_id"), field="variant_id"),
+            variant_kind=variant_kind,
+            artifact_id=artifact_id,
+            artifact_version=artifact_version,
+            evaluator_version=_require_text(values.get("evaluator_version"), field="evaluator_version"),
+            seed=_require_non_negative_int(values.get("seed"), field="seed"),
+            task_input_hash=_require_text(values.get("task_input_hash"), field="task_input_hash"),
+            workspace_baseline_hash=_require_text(values.get("workspace_baseline_hash"), field="workspace_baseline_hash"),
+            environment_hash=_require_text(values.get("environment_hash"), field="environment_hash"),
+            model_config_hash=_require_text(values.get("model_config_hash"), field="model_config_hash"),
+            variant_hash=_require_text(values.get("variant_hash"), field="variant_hash"),
+            task_outcome=task_outcome,
+            evaluation_status=evaluation_status,
+            success=success,
+            verification_quality=None if values.get("verification_quality") is None else _require_confidence(values["verification_quality"], field="verification_quality"),
+            cost=_optional_non_negative_number(values.get("cost"), field="cost"),
+            latency_ms=_optional_non_negative_number(values.get("latency_ms"), field="latency_ms"),
+            risk_events=_string_list(values.get("risk_events"), field="risk_events"),
+            evidence_refs=_string_list(values.get("evidence_refs"), field="evidence_refs"),
+            verification_commands=_string_list(values.get("verification_commands"), field="verification_commands"),
+            verification_skipped=_require_bool(values.get("verification_skipped"), field="verification_skipped"),
+            verification_coverage=_require_confidence(values.get("verification_coverage"), field="verification_coverage"),
+            claimed_success=None if values.get("claimed_success") is None else _require_bool(values["claimed_success"], field="claimed_success"),
+            evidence_success=None if values.get("evidence_success") is None else _require_bool(values["evidence_success"], field="evidence_success"),
+            output_truncated=_require_bool(values.get("output_truncated"), field="output_truncated"),
+            accessed_resource_hashes=_string_list(values.get("accessed_resource_hashes"), field="accessed_resource_hashes"),
+            invalid_reasons=_string_list(values.get("invalid_reasons"), field="invalid_reasons"),
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationComparisonCompletedPayload(EvoPayload):
+    """Separated baseline/candidate metrics used by the Promotion Gate."""
+
+    report_id: str
+    artifact_id: str
+    artifact_version: int
+    corpus_id: str
+    corpus_version: str
+    evaluator_version: str
+    baseline_variant_id: str
+    candidate_variant_id: str
+    case_ids: tuple[str, ...]
+    trial_event_ids: tuple[str, ...]
+    baseline_sample_count: int
+    candidate_sample_count: int
+    invalid_trial_count: int
+    minimum_repeats: int
+    baseline_success_rate: float
+    candidate_success_rate: float
+    baseline_verification_quality: float
+    candidate_verification_quality: float
+    baseline_cost: float
+    candidate_cost: float
+    baseline_latency_ms: float
+    candidate_latency_ms: float
+    baseline_risk_event_count: int
+    candidate_risk_event_count: int
+    uncertainty: float
+    eligible: bool
+    blocking_reasons: tuple[str, ...]
+    integrity_violations: tuple[str, ...]
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "EvaluationComparisonCompletedPayload":
+        known = {item.name for item in fields(cls) if item.name != "extensions"}
+        values, extensions = _payload_parts(raw, known=known)
+        artifact_version = _require_non_negative_int(values.get("artifact_version"), field="artifact_version")
+        if artifact_version < 1:
+            raise EvoEventError("artifact_version must be positive")
+        minimum_repeats = _require_non_negative_int(values.get("minimum_repeats"), field="minimum_repeats")
+        if minimum_repeats < 1:
+            raise EvoEventError("minimum_repeats must be positive")
+        return cls(
+            report_id=_require_text(values.get("report_id"), field="report_id"),
+            artifact_id=_require_text(values.get("artifact_id"), field="artifact_id"),
+            artifact_version=artifact_version,
+            corpus_id=_require_text(values.get("corpus_id"), field="corpus_id"),
+            corpus_version=_require_text(values.get("corpus_version"), field="corpus_version"),
+            evaluator_version=_require_text(values.get("evaluator_version"), field="evaluator_version"),
+            baseline_variant_id=_require_text(values.get("baseline_variant_id"), field="baseline_variant_id"),
+            candidate_variant_id=_require_text(values.get("candidate_variant_id"), field="candidate_variant_id"),
+            case_ids=_string_list(values.get("case_ids"), field="case_ids"),
+            trial_event_ids=_string_list(values.get("trial_event_ids"), field="trial_event_ids"),
+            baseline_sample_count=_require_non_negative_int(values.get("baseline_sample_count"), field="baseline_sample_count"),
+            candidate_sample_count=_require_non_negative_int(values.get("candidate_sample_count"), field="candidate_sample_count"),
+            invalid_trial_count=_require_non_negative_int(values.get("invalid_trial_count"), field="invalid_trial_count"),
+            minimum_repeats=minimum_repeats,
+            baseline_success_rate=_require_confidence(values.get("baseline_success_rate"), field="baseline_success_rate"),
+            candidate_success_rate=_require_confidence(values.get("candidate_success_rate"), field="candidate_success_rate"),
+            baseline_verification_quality=_require_confidence(values.get("baseline_verification_quality"), field="baseline_verification_quality"),
+            candidate_verification_quality=_require_confidence(values.get("candidate_verification_quality"), field="candidate_verification_quality"),
+            baseline_cost=_require_non_negative_number(values.get("baseline_cost"), field="baseline_cost"),
+            candidate_cost=_require_non_negative_number(values.get("candidate_cost"), field="candidate_cost"),
+            baseline_latency_ms=_require_non_negative_number(values.get("baseline_latency_ms"), field="baseline_latency_ms"),
+            candidate_latency_ms=_require_non_negative_number(values.get("candidate_latency_ms"), field="candidate_latency_ms"),
+            baseline_risk_event_count=_require_non_negative_int(values.get("baseline_risk_event_count"), field="baseline_risk_event_count"),
+            candidate_risk_event_count=_require_non_negative_int(values.get("candidate_risk_event_count"), field="candidate_risk_event_count"),
+            uncertainty=_require_confidence(values.get("uncertainty"), field="uncertainty"),
+            eligible=_require_bool(values.get("eligible"), field="eligible"),
+            blocking_reasons=_string_list(values.get("blocking_reasons"), field="blocking_reasons"),
+            integrity_violations=_string_list(values.get("integrity_violations"), field="integrity_violations"),
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class EvaluationCompletedPayload(EvoPayload):
     dataset: str
     evaluator_version: str
@@ -642,6 +1137,7 @@ class EvoReferences:
     node_id: str | None = None
     memory_id: str | None = None
     candidate_id: str | None = None
+    artifact_id: str | None = None
     evidence_id: str | None = None
     evaluation_id: str | None = None
     promotion_id: str | None = None
@@ -657,6 +1153,7 @@ class EvoReferences:
             "node_id",
             "memory_id",
             "candidate_id",
+            "artifact_id",
             "evidence_id",
             "evaluation_id",
             "promotion_id",
@@ -704,6 +1201,7 @@ class EvoReferences:
             node_id=None if values.get("node_id") is None else require_evo_id(values["node_id"], field="node_id", kind="node"),
             memory_id=None if values.get("memory_id") is None else require_evo_id(values["memory_id"], field="memory_id", kind="memory"),
             candidate_id=None if values.get("candidate_id") is None else require_evo_id(values["candidate_id"], field="candidate_id", kind="candidate"),
+            artifact_id=None if values.get("artifact_id") is None else require_evo_id(values["artifact_id"], field="artifact_id", kind="artifact"),
             evidence_id=None if values.get("evidence_id") is None else require_evo_id(values["evidence_id"], field="evidence_id", kind="evidence"),
             evaluation_id=None if values.get("evaluation_id") is None else require_evo_id(values["evaluation_id"], field="evaluation_id", kind="evaluation"),
             promotion_id=None if values.get("promotion_id") is None else require_evo_id(values["promotion_id"], field="promotion_id", kind="promotion"),
@@ -832,9 +1330,15 @@ EvoEvent._payload_types = {
     "MemoryCreated": MemoryCreatedPayload,
     "MemoryUsed": MemoryUsedPayload,
     "ExperienceCandidateCreated": ExperienceCandidateCreatedPayload,
+    "CandidateArtifactCreated": CandidateArtifactCreatedPayload,
+    "CandidateShadowTrialRecorded": CandidateShadowTrialRecordedPayload,
+    "CandidateArtifactControlChanged": CandidateArtifactControlChangedPayload,
     "CandidateMergeProposed": CandidateMergeProposedPayload,
     "CandidateConflictDetected": CandidateConflictDetectedPayload,
     "CandidateReviewRecorded": CandidateReviewRecordedPayload,
+    "EvaluationCorpusRegistered": EvaluationCorpusRegisteredPayload,
+    "EvaluationTrialRecorded": EvaluationTrialRecordedPayload,
+    "EvaluationComparisonCompleted": EvaluationComparisonCompletedPayload,
     "EvaluationCompleted": EvaluationCompletedPayload,
     "PromotionChanged": PromotionChangedPayload,
     "SelfModelUpdated": SelfModelUpdatedPayload,
