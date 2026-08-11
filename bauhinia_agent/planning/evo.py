@@ -9,6 +9,7 @@ permission decision itself.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Callable, Literal, Mapping, Protocol, cast
 
 from bauhinia_agent.evolution.events import (
@@ -33,7 +34,11 @@ ReplanTrigger = Literal[
     "cancelled",
 ]
 ReplanOutcome = Literal["continue", "narrow", "replace", "request_help", "terminate"]
-PlanningRole = Literal["planner", "executor", "verifier"]
+PlanningRole = Literal["planner", "researcher", "executor", "verifier", "critic", "curator"]
+CancellationMode = Literal["cooperative", "terminate"]
+
+_PLANNING_ROLES = frozenset({"planner", "researcher", "executor", "verifier", "critic", "curator"})
+_CANCELLATION_MODES = frozenset({"cooperative", "terminate"})
 
 _NODE_STATUSES = frozenset({"pending", "in_progress", "completed", "failed", "blocked", "cancelled", "superseded"})
 _REPLAN_TRIGGERS = frozenset(
@@ -98,6 +103,17 @@ def _confidence(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= float(value) <= 1:
         raise PlanGraphError("confidence must be between 0 and 1")
     return float(value)
+
+
+def _utc_deadline(value: object, *, field: str) -> str:
+    text = _text(value, field=field)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise PlanGraphError(f"{field} must be a UTC ISO-8601 string") from error
+    if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
+        raise PlanGraphError(f"{field} must include UTC timezone")
+    return text
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,9 +400,14 @@ class TaskContract:
     allowed_effects: tuple[str, ...]
     expected_evidence: tuple[str, ...]
     budget: PlanBudget
+    capabilities: tuple[str, ...] = ()
+    resource_claims: tuple[str, ...] = ()
+    minimum_confidence: float = 0.5
+    cancellation_mode: CancellationMode = "cooperative"
+    deadline_at: str | None = None
 
     def __post_init__(self) -> None:
-        if self.role not in {"planner", "executor", "verifier"}:
+        if self.role not in _PLANNING_ROLES:
             raise PlanGraphError(f"unknown planning role: {self.role!r}")
         _identifier(self.plan_id, field="plan_id", kind="plan")
         _identifier(self.node_id, field="node_id", kind="node")
@@ -394,6 +415,80 @@ class TaskContract:
         _text(self.input_snapshot, field="input_snapshot")
         _string_tuple(self.allowed_effects, field="allowed_effects")
         _string_tuple(self.expected_evidence, field="expected_evidence")
+        _string_tuple(self.capabilities, field="capabilities")
+        claims = _string_tuple(self.resource_claims, field="resource_claims")
+        for claim in claims:
+            if not claim.startswith(("read:", "write:")) or not claim.partition(":")[2].strip():
+                raise PlanGraphError("resource_claims entries must use read:<resource> or write:<resource>")
+        _confidence(self.minimum_confidence)
+        if self.cancellation_mode not in _CANCELLATION_MODES:
+            raise PlanGraphError(f"unknown cancellation mode: {self.cancellation_mode!r}")
+        if self.deadline_at is not None:
+            _utc_deadline(self.deadline_at, field="deadline_at")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "role": self.role,
+            "plan_id": self.plan_id,
+            "node_id": self.node_id,
+            "goal": self.goal,
+            "input_snapshot": self.input_snapshot,
+            "allowed_effects": list(self.allowed_effects),
+            "expected_evidence": list(self.expected_evidence),
+            "budget": self.budget.to_dict(),
+            "capabilities": list(self.capabilities),
+            "resource_claims": list(self.resource_claims),
+            "minimum_confidence": self.minimum_confidence,
+            "cancellation_mode": self.cancellation_mode,
+            "deadline_at": self.deadline_at,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "TaskContract":
+        if not isinstance(raw, Mapping):
+            raise PlanGraphError("task contract must be an object")
+        known = {
+            "role",
+            "plan_id",
+            "node_id",
+            "goal",
+            "input_snapshot",
+            "allowed_effects",
+            "expected_evidence",
+            "budget",
+            "capabilities",
+            "resource_claims",
+            "minimum_confidence",
+            "cancellation_mode",
+            "deadline_at",
+        }
+        unknown = set(raw).difference(known)
+        if unknown:
+            raise PlanGraphError(f"task contract has unknown field: {sorted(unknown)[0]}")
+        role = raw.get("role")
+        cancellation_mode = raw.get("cancellation_mode", "cooperative")
+        if not isinstance(role, str):
+            raise PlanGraphError("role must be a string")
+        if not isinstance(cancellation_mode, str):
+            raise PlanGraphError("cancellation_mode must be a string")
+        deadline = raw.get("deadline_at")
+        if deadline is not None and not isinstance(deadline, str):
+            raise PlanGraphError("deadline_at must be a string or null")
+        return cls(
+            role=cast(PlanningRole, role),
+            plan_id=_identifier(raw.get("plan_id"), field="plan_id", kind="plan"),
+            node_id=_identifier(raw.get("node_id"), field="node_id", kind="node"),
+            goal=_text(raw.get("goal"), field="goal"),
+            input_snapshot=_text(raw.get("input_snapshot"), field="input_snapshot"),
+            allowed_effects=_string_tuple(raw.get("allowed_effects"), field="allowed_effects"),
+            expected_evidence=_string_tuple(raw.get("expected_evidence"), field="expected_evidence"),
+            budget=PlanBudget.from_dict(raw.get("budget")),
+            capabilities=_string_tuple(raw.get("capabilities"), field="capabilities"),
+            resource_claims=_string_tuple(raw.get("resource_claims"), field="resource_claims"),
+            minimum_confidence=_confidence(raw.get("minimum_confidence", 0.5)),
+            cancellation_mode=cast(CancellationMode, cancellation_mode),
+            deadline_at=deadline,
+        )
 
 
 class PermissionPreflight(Protocol):

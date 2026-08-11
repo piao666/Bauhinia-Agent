@@ -14,6 +14,7 @@ from typing import Protocol
 from bauhinia_agent.evolution.diagnosis import DiagnosisService, DiagnosisSummary
 from bauhinia_agent.evolution.evidence import EvidenceAdapter, EvidenceRecord, redact_text
 from bauhinia_agent.evolution.events import (
+    CollaborationRunAggregatedPayload,
     DecisionRecordedPayload,
     EvoEvent,
     EvoReferences,
@@ -149,7 +150,7 @@ def _source_events(events: list[EvoEvent], run_id: str, evidence: list[EvidenceR
             continue
         if event.event_id in evidence_event_ids or event.event_id == outcome.event_id:
             selected.append(event)
-        elif event.event_type in {"PlanCreated", "DecisionRecorded"}:
+        elif event.event_type in {"PlanCreated", "DecisionRecorded"} or isinstance(event.payload, CollaborationRunAggregatedPayload):
             selected.append(event)
     return tuple(selected)
 

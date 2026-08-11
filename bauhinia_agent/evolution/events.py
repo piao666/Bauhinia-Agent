@@ -40,8 +40,14 @@ EVO_EVENT_TYPES = frozenset(
         "PromotionChanged",
         "SelfModelObservationRecorded",
         "SelfModelUpdated",
+        "CollaborationTaskDelegated",
+        "CollaborationTaskResultRecorded",
+        "CollaborationConflictDetected",
+        "CollaborationRunAggregated",
     }
 )
+_COLLABORATION_STATUSES = frozenset({"success", "failure", "cancelled", "timeout", "permission_denied"})
+_COLLABORATION_CONFLICT_KINDS = frozenset({"resource", "conclusion"})
 
 
 class EvoEventError(ValueError):
@@ -1173,6 +1179,151 @@ class SelfModelObservationRecordedPayload(EvoPayload):
 
 
 @dataclass(frozen=True, slots=True)
+class CollaborationTaskDelegatedPayload(EvoPayload):
+    collaboration_id: str
+    assignment_id: str
+    runtime_role: str
+    contract: dict[str, object]
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "CollaborationTaskDelegatedPayload":
+        values, extensions = _payload_parts(raw, known={"collaboration_id", "assignment_id", "runtime_role", "contract"})
+        contract = values.get("contract")
+        if not isinstance(contract, Mapping):
+            raise EvoEventError("contract must be an object")
+        return cls(
+            collaboration_id=_require_text(values.get("collaboration_id"), field="collaboration_id"),
+            assignment_id=_require_text(values.get("assignment_id"), field="assignment_id"),
+            runtime_role=_require_text(values.get("runtime_role"), field="runtime_role"),
+            contract={str(key): _json_value(value, field=f"contract.{key}") for key, value in contract.items()},
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationTaskResultRecordedPayload(EvoPayload):
+    collaboration_id: str
+    assignment_id: str
+    status: str
+    summary: str
+    evidence_refs: tuple[str, ...]
+    confidence: float
+    eligible_for_learning: bool
+    child_run_id: str | None = None
+    child_session_id: str | None = None
+    claim_fingerprints: tuple[str, ...] = ()
+    files_changed: tuple[str, ...] = ()
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "CollaborationTaskResultRecordedPayload":
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "collaboration_id",
+                "assignment_id",
+                "status",
+                "summary",
+                "evidence_refs",
+                "confidence",
+                "eligible_for_learning",
+                "child_run_id",
+                "child_session_id",
+                "claim_fingerprints",
+                "files_changed",
+            },
+        )
+        status = _require_text(values.get("status"), field="status")
+        if status not in _COLLABORATION_STATUSES:
+            raise EvoEventError(f"unknown collaboration status: {status!r}")
+        return cls(
+            collaboration_id=_require_text(values.get("collaboration_id"), field="collaboration_id"),
+            assignment_id=_require_text(values.get("assignment_id"), field="assignment_id"),
+            status=status,
+            summary=_require_text(values.get("summary"), field="summary"),
+            evidence_refs=_string_list(values.get("evidence_refs"), field="evidence_refs"),
+            confidence=_require_confidence(values.get("confidence")),
+            eligible_for_learning=_require_bool(values.get("eligible_for_learning"), field="eligible_for_learning"),
+            child_run_id=_optional_text(values.get("child_run_id"), field="child_run_id"),
+            child_session_id=_optional_text(values.get("child_session_id"), field="child_session_id"),
+            claim_fingerprints=_string_list(values.get("claim_fingerprints"), field="claim_fingerprints"),
+            files_changed=_string_list(values.get("files_changed"), field="files_changed"),
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationConflictDetectedPayload(EvoPayload):
+    collaboration_id: str
+    conflict_kind: str
+    assignment_ids: tuple[str, ...]
+    branches: tuple[str, ...]
+    resolution_state: str
+    resource: str | None = None
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "CollaborationConflictDetectedPayload":
+        values, extensions = _payload_parts(
+            raw,
+            known={"collaboration_id", "conflict_kind", "assignment_ids", "branches", "resolution_state", "resource"},
+        )
+        conflict_kind = _require_text(values.get("conflict_kind"), field="conflict_kind")
+        if conflict_kind not in _COLLABORATION_CONFLICT_KINDS:
+            raise EvoEventError(f"unknown collaboration conflict kind: {conflict_kind!r}")
+        assignment_ids = _string_list(values.get("assignment_ids"), field="assignment_ids")
+        if len(assignment_ids) < 2:
+            raise EvoEventError("collaboration conflicts require at least two assignment_ids")
+        return cls(
+            collaboration_id=_require_text(values.get("collaboration_id"), field="collaboration_id"),
+            conflict_kind=conflict_kind,
+            assignment_ids=assignment_ids,
+            branches=_string_list(values.get("branches"), field="branches"),
+            resolution_state=_require_text(values.get("resolution_state"), field="resolution_state"),
+            resource=_optional_text(values.get("resource"), field="resource"),
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationRunAggregatedPayload(EvoPayload):
+    collaboration_id: str
+    child_run_ids: tuple[str, ...]
+    result_event_ids: tuple[str, ...]
+    conflict_event_ids: tuple[str, ...]
+    evidence_group_count: int
+    independent_support_count: int
+    eligible_result_ids: tuple[str, ...]
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "CollaborationRunAggregatedPayload":
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "collaboration_id",
+                "child_run_ids",
+                "result_event_ids",
+                "conflict_event_ids",
+                "evidence_group_count",
+                "independent_support_count",
+                "eligible_result_ids",
+            },
+        )
+        return cls(
+            collaboration_id=_require_text(values.get("collaboration_id"), field="collaboration_id"),
+            child_run_ids=_string_list(values.get("child_run_ids"), field="child_run_ids"),
+            result_event_ids=_string_list(values.get("result_event_ids"), field="result_event_ids"),
+            conflict_event_ids=_string_list(values.get("conflict_event_ids"), field="conflict_event_ids"),
+            evidence_group_count=_require_non_negative_int(values.get("evidence_group_count"), field="evidence_group_count"),
+            independent_support_count=_require_non_negative_int(values.get("independent_support_count"), field="independent_support_count"),
+            eligible_result_ids=_string_list(values.get("eligible_result_ids"), field="eligible_result_ids"),
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class UnknownEvoPayload(EvoPayload):
     """Payload for a future event type; raw fields remain inspectable."""
 
@@ -1404,4 +1555,8 @@ EvoEvent._payload_types = {
     "PromotionChanged": PromotionChangedPayload,
     "SelfModelObservationRecorded": SelfModelObservationRecordedPayload,
     "SelfModelUpdated": SelfModelUpdatedPayload,
+    "CollaborationTaskDelegated": CollaborationTaskDelegatedPayload,
+    "CollaborationTaskResultRecorded": CollaborationTaskResultRecordedPayload,
+    "CollaborationConflictDetected": CollaborationConflictDetectedPayload,
+    "CollaborationRunAggregated": CollaborationRunAggregatedPayload,
 }

@@ -11,7 +11,7 @@ The first implementation keeps the boundary deliberately small:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -98,6 +98,10 @@ class SubagentRequest:
     path_hints: list[str] = field(default_factory=list)
     run_in_background: bool = False
     isolate_worktree: bool = False
+    parent_run_id: str | None = None
+    child_run_id: str | None = None
+    max_tool_rounds: int | None = None
+    max_output_tokens: int | None = None
 
 
 @dataclass(slots=True)
@@ -112,6 +116,7 @@ class SubagentResult:
     worktree_path: str | None = None
     worktree_branch: str | None = None
     diff_summary: str | None = None
+    confidence: float = 0.0
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -124,6 +129,7 @@ class SubagentResult:
             "worktree_path": self.worktree_path,
             "worktree_branch": self.worktree_branch,
             "diff_summary": self.diff_summary,
+            "confidence": self.confidence,
         }
 
 
@@ -212,8 +218,8 @@ class SubagentRunner:
             session=child_session,
             provider=self.provider,
             tools=self.tools_for_role(request.role),
-            limits=self.limits,
-            request_options=self.request_options,
+            limits=self._limits_for(request),
+            request_options=self._request_options_for(request),
             background_manager=None,
             enable_delegate_tool=False,
         )
@@ -233,6 +239,7 @@ class SubagentRunner:
             role=request.role,
             child_session_id=child_session.session_id,
             summary=content,
+            evidence=self._evidence_refs(child_session.session_id),
         )
 
     def _run_isolated(self, request: SubagentRequest, *, profile: SubagentProfile) -> SubagentResult:
@@ -284,8 +291,8 @@ class SubagentRunner:
                 session=child_session,
                 provider=self.provider,
                 tools=self._worktree_child_tools(worktree.path, profile=profile, access=child_session.sandbox_access),
-                limits=self.limits,
-                request_options=self.request_options,
+                limits=self._limits_for(request),
+                request_options=self._request_options_for(request),
                 background_manager=None,
                 enable_delegate_tool=False,
             )
@@ -324,6 +331,7 @@ class SubagentRunner:
                 role=request.role,
                 child_session_id=session_id,
                 summary=summary,
+                evidence=self._evidence_refs(session_id),
                 files_changed=diff.files_changed,
                 worktree_path=str(worktree.path),
                 worktree_branch=worktree.branch,
@@ -354,6 +362,8 @@ class SubagentRunner:
         child.writer.append_session_metadata_updated(
             parent_session_id=request.parent_session_id,
             parent_task_hash=request.parent_task_hash,
+            parent_run_id=request.parent_run_id,
+            child_run_id=request.child_run_id,
             delegate_role=profile.role,
             delegate_task=request.task,
         )
@@ -405,6 +415,8 @@ class SubagentRunner:
         child.writer.append_session_metadata_updated(
             parent_session_id=request.parent_session_id,
             parent_task_hash=request.parent_task_hash,
+            parent_run_id=request.parent_run_id,
+            child_run_id=request.child_run_id,
             delegate_role=profile.role,
             delegate_task=request.task,
             worktree_path=str(worktree.path),
@@ -504,6 +516,25 @@ class SubagentRunner:
             f"Path hints:\n{hints or '(none)'}\n\n"
             f"Task:\n{request.task}"
         )
+
+    def _evidence_refs(self, session_id: str) -> list[str]:
+        """Return stable child-session tool-result event IDs, never model claims."""
+
+        return [event.id for event in self.store.list_events(session_id) if event.type == "tool_result"]
+
+    def _limits_for(self, request: SubagentRequest) -> AgentLoopLimits:
+        requested = request.max_tool_rounds
+        if requested is None:
+            return self.limits
+        configured = self.limits.max_tool_rounds
+        return replace(self.limits, max_tool_rounds=requested if configured is None else min(requested, configured))
+
+    def _request_options_for(self, request: SubagentRequest) -> MainRequestOptions:
+        requested = request.max_output_tokens
+        if requested is None:
+            return self.request_options
+        configured = self.request_options.max_tokens
+        return replace(self.request_options, max_tokens=requested if configured is None else min(requested, configured))
 
     def _compose_isolated_summary(self, content: str, *, worktree: Worktree, diff: "WorktreeDiff") -> str:
         parts = [

@@ -14,6 +14,7 @@ from bauhinia_agent.planning.models import (
     TaskStatus,
 )
 from bauhinia_agent.planning.evo import (
+    CancellationMode,
     DecisionRecord,
     EvoPlanningService,
     ExecutionReceipt,
@@ -22,6 +23,7 @@ from bauhinia_agent.planning.evo import (
     PlanGraphError,
     PlanNode,
     PlanningExecutionGate,
+    PlanningRole,
     ReplanRequest,
     TaskContract,
 )
@@ -42,6 +44,7 @@ __all__ = [
     "TaskPlanMode",
     "TaskStatus",
     "DecisionRecord",
+    "CancellationMode",
     "EvoPlanningService",
     "ExecutionReceipt",
     "PlanBudget",
@@ -49,6 +52,7 @@ __all__ = [
     "PlanGraphError",
     "PlanNode",
     "PlanningExecutionGate",
+    "PlanningRole",
     "ReplanRequest",
     "TaskContract",
     "blocked_task_ids",
