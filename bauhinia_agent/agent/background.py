@@ -166,6 +166,10 @@ class BackgroundJob:
     created_at: float = 0.0
     token: CancellationToken = field(default_factory=CancellationToken)
     on_completed: Callable[["BackgroundJob"], str | None] | None = field(default=None, repr=False)
+    on_cancelled: Callable[["BackgroundJob"], None] | None = field(
+        default=None,
+        repr=False,
+    )
     task_plan_completion: str | None = None
 
     def snapshot(self) -> dict[str, Any]:
@@ -216,6 +220,7 @@ class BackgroundJobManager:
         task_id: str | None = None,
         observed_revision: int | None = None,
         on_completed: Callable[[BackgroundJob], str | None] | None = None,
+        on_cancelled: Callable[[BackgroundJob], None] | None = None,
     ) -> BackgroundJob:
         """登记并调度一个后台任务。
 
@@ -239,6 +244,7 @@ class BackgroundJobManager:
                 observed_revision=observed_revision,
                 created_at=self._clock(),
                 on_completed=on_completed,
+                on_cancelled=on_cancelled,
             )
             self._jobs[job_id] = job
             future = self._executor.submit(self._run, job, func)
@@ -343,6 +349,7 @@ class BackgroundJobManager:
         - 已在运行：设置协作取消 token；能否真正停下取决于工具是否检查取消。
         """
 
+        cancelled_before_start = False
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None or (session_id is not None and job.session_id != session_id):
@@ -354,10 +361,16 @@ class BackgroundJobManager:
                 job.status = STATUS_CANCELLED
                 self._futures.pop(job_id, None)
                 self._completed.append(job)
+                cancelled_before_start = True
             else:
                 job.cancel_requested = True
                 job.token.cancel()
-            return job
+        if cancelled_before_start and job.on_cancelled is not None:
+            try:
+                job.on_cancelled(job)
+            except Exception as exc:  # noqa: BLE001 - cancellation remains authoritative
+                job.error = f"Cancellation recorder failed: {exc}"
+        return job
 
     def wait(self, timeout: float | None = None) -> bool:
         """阻塞直到当前已知的 future 全部结束。主要给测试用。
@@ -372,7 +385,14 @@ class BackgroundJobManager:
         _, not_done = futures_wait(futures, timeout=timeout)
         return not not_done
 
-    def shutdown(self) -> None:
+    def shutdown(self, *, timeout: float = 5.0) -> None:
+        """Cancel every active token, finalize queued jobs, then close workers."""
+
+        with self._lock:
+            active_ids = tuple(job.id for job in self._jobs.values() if job.status == STATUS_RUNNING)
+        for job_id in active_ids:
+            self.cancel(job_id)
+        self.wait(timeout=max(0.0, timeout))
         self._executor.shutdown(wait=False, cancel_futures=True)
 
 

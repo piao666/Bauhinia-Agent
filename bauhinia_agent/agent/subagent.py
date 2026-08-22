@@ -13,8 +13,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
+from bauhinia_agent.agent.capability_scope import CapabilityScopeError, scope_tools
 from bauhinia_agent.agent.loop_limits import AgentLoopLimits
 from bauhinia_agent.agent.session import AgentSession
 from bauhinia_agent.agent.worktree import Worktree, WorktreeDiff, WorktreeError, WorktreeManager
@@ -25,10 +26,16 @@ from bauhinia_agent.permissions.manager import PermissionManager
 from bauhinia_agent.permissions.policy import DefaultPermissionPolicy
 from bauhinia_agent.permissions.types import PermissionAction, PermissionGrant, PermissionMode, PermissionScopeType
 from bauhinia_agent.providers.base import ChatProvider
-from bauhinia_agent.providers.types import ChatResponse, MainRequestOptions
+from bauhinia_agent.providers.types import MainRequestOptions
+from bauhinia_agent.runtime.cancellation import AgentCancelledError, CancellationToken
 from bauhinia_agent.skills.models import SkillCatalog
+from bauhinia_agent.tools.permission_registry import PermissionAwareToolRegistry
+from bauhinia_agent.tools.registry import ToolRegistry
 from bauhinia_agent.tools.types import Tool
 from bauhinia_agent.utils.sandbox_access import SandboxAccess, SandboxAccessMode
+
+if TYPE_CHECKING:
+    from bauhinia_agent.agent.evo_observer import AgentEvoObserver, AgentEvoRunResult
 
 SubagentRole = Literal["researcher", "reviewer", "tester", "coder"]
 
@@ -43,13 +50,12 @@ READ_ONLY_TOOL_NAMES = frozenset(
         "git_status",
         "git_diff",
         "git_log",
-        "diagnostics",
         "think",
         "retrieve_archive",
     }
 )
 REVIEWER_TOOL_NAMES = frozenset({"view", "grep", "git_status", "git_diff", "git_log", "read_multi", "think", "retrieve_archive"})
-TESTER_TOOL_NAMES = READ_ONLY_TOOL_NAMES | frozenset({"shell", "python_exec"})
+TESTER_TOOL_NAMES = READ_ONLY_TOOL_NAMES | frozenset({"diagnostics", "shell", "python_exec"})
 CODER_TOOL_NAMES = TESTER_TOOL_NAMES | frozenset({"write", "edit", "delete", "apply_patch"})
 
 
@@ -102,6 +108,10 @@ class SubagentRequest:
     child_run_id: str | None = None
     max_tool_rounds: int | None = None
     max_output_tokens: int | None = None
+    # Runtime-only contract narrowing. ``None`` preserves the legacy profile
+    # default; an explicit empty collection grants no capability/effect.
+    allowed_tool_names: tuple[str, ...] | None = None
+    allowed_effects: tuple[str, ...] | None = None
 
 
 @dataclass(slots=True)
@@ -117,6 +127,8 @@ class SubagentResult:
     worktree_branch: str | None = None
     diff_summary: str | None = None
     confidence: float = 0.0
+    confidence_source: str = "unknown"
+    confidence_source_event_id: str | None = None
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -130,6 +142,8 @@ class SubagentResult:
             "worktree_branch": self.worktree_branch,
             "diff_summary": self.diff_summary,
             "confidence": self.confidence,
+            "confidence_source": self.confidence_source,
+            "confidence_source_event_id": self.confidence_source_event_id,
         }
 
 
@@ -169,9 +183,48 @@ class SubagentRunner:
         profile = self.profile(role)
         if profile is None:
             return []
-        return [tool for tool in self.tools if tool.name in profile.allowed_tool_names and tool.name != "delegate"]
+        return scope_tools(
+            self.tools,
+            profile_tool_names=profile.allowed_tool_names,
+            allowed_tool_names=None,
+            allowed_effects=None,
+        )
 
-    def run(self, request: SubagentRequest) -> SubagentResult:
+    def tools_for_request(self, request: SubagentRequest) -> list[Tool]:
+        """Return the parent-rooted tools allowed by profile and contract."""
+
+        profile = self.profile(request.role)
+        if profile is None:
+            return []
+        return self._scope_tools(self.tools, request=request, profile=profile)
+
+    def validate_contract_scope(
+        self,
+        *,
+        role: str,
+        allowed_tool_names: tuple[str, ...] | None,
+        allowed_effects: tuple[str, ...] | None,
+    ) -> None:
+        """Validate capability/Effect fields without executing or persisting."""
+
+        profile = self.profile(role)
+        if profile is None:
+            raise CapabilityScopeError(f"unknown subagent role: {role}")
+        request = SubagentRequest(
+            role=profile.role,
+            task="runtime scope validation",
+            parent_session_id="session_scope_validation",
+            allowed_tool_names=allowed_tool_names,
+            allowed_effects=allowed_effects,
+        )
+        self._scope_tools(self.tools, request=request, profile=profile)
+
+    def run(
+        self,
+        request: SubagentRequest,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> SubagentResult:
         profile = self.profile(request.role)
         if profile is None:
             return SubagentResult(
@@ -180,6 +233,19 @@ class SubagentRunner:
                 child_session_id="",
                 summary=f"Unknown subagent role: {request.role}",
                 error="unknown_role",
+            )
+        if cancellation_token is not None and cancellation_token.is_cancelled:
+            return self._cancelled_result(request)
+        try:
+            # Validate unknown Effects before creating a child session/worktree.
+            self._scope_tools(self.tools, request=request, profile=profile)
+        except CapabilityScopeError as error:
+            return SubagentResult(
+                ok=False,
+                role=request.role,
+                child_session_id="",
+                summary=f"Subagent contract was rejected: {error}",
+                error="capability_scope_invalid",
             )
         if request.run_in_background and not profile.allow_background:
             return SubagentResult(
@@ -191,8 +257,16 @@ class SubagentRunner:
             )
 
         if self._needs_worktree(request, profile=profile):
-            return self._run_isolated(request, profile=profile)
-        return self._run_inline(request, profile=profile)
+            return self._run_isolated(
+                request,
+                profile=profile,
+                cancellation_token=cancellation_token,
+            )
+        return self._run_inline(
+            request,
+            profile=profile,
+            cancellation_token=cancellation_token,
+        )
 
     def _needs_worktree(self, request: SubagentRequest, *, profile: SubagentProfile) -> bool:
         """Whether this run must execute inside an isolated git worktree.
@@ -207,25 +281,46 @@ class SubagentRunner:
             return True
         return bool(profile.requires_worktree and request.run_in_background)
 
-    def _run_inline(self, request: SubagentRequest, *, profile: SubagentProfile) -> SubagentResult:
+    def _run_inline(
+        self,
+        request: SubagentRequest,
+        *,
+        profile: SubagentProfile,
+        cancellation_token: CancellationToken | None,
+    ) -> SubagentResult:
         """Original Phase 2 behaviour: run the child against the parent-rooted tools."""
 
         child_session = self.create_child_session(request, profile=profile)
         prompt = self._child_prompt(request, profile=profile)
         from bauhinia_agent.agent.loop import AgentLoop
 
+        observer = self._observer_for(child_session, request=request)
         loop = AgentLoop(
             session=child_session,
             provider=self.provider,
-            tools=self.tools_for_role(request.role),
+            tools=child_session.tool_registry.tools(),
             limits=self._limits_for(request),
             request_options=self._request_options_for(request),
+            cancellation_token=cancellation_token,
             background_manager=None,
             enable_delegate_tool=False,
+            evolution_observer=observer,
         )
         try:
             response = loop.run_user_turn(prompt)
+        except AgentCancelledError:
+            return self._cancelled_result(
+                request,
+                child_session_id=child_session.session_id,
+                observer=observer,
+            )
         except Exception as exc:  # noqa: BLE001 - delegate must return a tool result, not break parent loop
+            if cancellation_token is not None and cancellation_token.is_cancelled:
+                return self._cancelled_result(
+                    request,
+                    child_session_id=child_session.session_id,
+                    observer=observer,
+                )
             return SubagentResult(
                 ok=False,
                 role=request.role,
@@ -233,16 +328,27 @@ class SubagentRunner:
                 summary=f"Subagent failed: {exc}",
                 error=str(exc),
             )
+        if cancellation_token is not None and cancellation_token.is_cancelled:
+            return self._cancelled_result(
+                request,
+                child_session_id=child_session.session_id,
+                observer=observer,
+            )
         content = response.content.strip() or "Subagent finished without text output."
-        return SubagentResult(
-            ok=True,
-            role=request.role,
+        return self._completed_result(
+            request,
             child_session_id=child_session.session_id,
             summary=content,
-            evidence=self._evidence_refs(child_session.session_id),
+            observer=observer,
         )
 
-    def _run_isolated(self, request: SubagentRequest, *, profile: SubagentProfile) -> SubagentResult:
+    def _run_isolated(
+        self,
+        request: SubagentRequest,
+        *,
+        profile: SubagentProfile,
+        cancellation_token: CancellationToken | None,
+    ) -> SubagentResult:
         """Phase 4: run a mutation-capable child inside a dedicated git worktree.
 
         The child gets fresh tools rooted at the worktree and a child
@@ -252,6 +358,8 @@ class SubagentRunner:
         parent review; nothing is auto-merged.
         """
 
+        if cancellation_token is not None and cancellation_token.is_cancelled:
+            return self._cancelled_result(request)
         if self.project_root is None:
             return SubagentResult(
                 ok=False,
@@ -287,65 +395,116 @@ class SubagentRunner:
             prompt = self._child_prompt(request, profile=profile, worktree=worktree)
             from bauhinia_agent.agent.loop import AgentLoop
 
+            observer = self._observer_for(child_session, request=request)
             loop = AgentLoop(
                 session=child_session,
                 provider=self.provider,
-                tools=self._worktree_child_tools(worktree.path, profile=profile, access=child_session.sandbox_access),
+                tools=child_session.tool_registry.tools(),
                 limits=self._limits_for(request),
                 request_options=self._request_options_for(request),
+                cancellation_token=cancellation_token,
                 background_manager=None,
                 enable_delegate_tool=False,
+                evolution_observer=observer,
             )
             try:
                 response = loop.run_user_turn(prompt)
+            except AgentCancelledError:
+                diff = manager.diff(worktree)
+                return self._discard_failed_worktree(
+                    manager,
+                    worktree,
+                    self._cancelled_result(
+                        request,
+                        child_session_id=session_id,
+                        observer=observer,
+                        diff=diff,
+                        worktree=worktree,
+                    ),
+                )
             except Exception as exc:  # noqa: BLE001 - never break the parent loop
                 diff = manager.diff(worktree)
-                return SubagentResult(
-                    ok=False,
-                    role=request.role,
-                    child_session_id=session_id,
-                    summary=f"隔离 coder 执行失败：{exc}",
-                    error=str(exc),
-                    files_changed=diff.files_changed,
-                    worktree_path=str(worktree.path),
-                    worktree_branch=worktree.branch,
-                    diff_summary=diff.render(),
+                if cancellation_token is not None and cancellation_token.is_cancelled:
+                    return self._discard_failed_worktree(
+                        manager,
+                        worktree,
+                        self._cancelled_result(
+                            request,
+                            child_session_id=session_id,
+                            observer=observer,
+                            diff=diff,
+                            worktree=worktree,
+                        ),
+                    )
+                return self._discard_failed_worktree(
+                    manager,
+                    worktree,
+                    SubagentResult(
+                        ok=False,
+                        role=request.role,
+                        child_session_id=session_id,
+                        summary=f"隔离 coder 执行失败：{exc}",
+                        error=str(exc),
+                        files_changed=diff.files_changed,
+                        worktree_path=str(worktree.path),
+                        worktree_branch=worktree.branch,
+                        diff_summary=diff.render(),
+                    ),
                 )
             diff = manager.diff(worktree)
+            if cancellation_token is not None and cancellation_token.is_cancelled:
+                return self._discard_failed_worktree(
+                    manager,
+                    worktree,
+                    self._cancelled_result(
+                        request,
+                        child_session_id=session_id,
+                        observer=observer,
+                        diff=diff,
+                        worktree=worktree,
+                    ),
+                )
             content = response.content.strip() or "Subagent finished without text output."
             if response.finish_reason == "waiting_for_user_input":
-                return SubagentResult(
-                    ok=False,
-                    role=request.role,
-                    child_session_id=session_id,
-                    summary=f"隔离 coder 等待用户输入，无法在后台继续：{content}",
-                    error="waiting_for_user_input",
-                    files_changed=diff.files_changed,
-                    worktree_path=str(worktree.path),
-                    worktree_branch=worktree.branch,
-                    diff_summary=diff.render(),
+                return self._discard_failed_worktree(
+                    manager,
+                    worktree,
+                    SubagentResult(
+                        ok=False,
+                        role=request.role,
+                        child_session_id=session_id,
+                        summary=f"隔离 coder 等待用户输入，无法在后台继续：{content}",
+                        error="waiting_for_user_input",
+                        files_changed=diff.files_changed,
+                        worktree_path=str(worktree.path),
+                        worktree_branch=worktree.branch,
+                        diff_summary=diff.render(),
+                    ),
                 )
             summary = self._compose_isolated_summary(content, worktree=worktree, diff=diff)
-            return SubagentResult(
-                ok=True,
-                role=request.role,
+            return self._completed_result(
+                request,
                 child_session_id=session_id,
                 summary=summary,
-                evidence=self._evidence_refs(session_id),
+                observer=observer,
                 files_changed=diff.files_changed,
                 worktree_path=str(worktree.path),
                 worktree_branch=worktree.branch,
                 diff_summary=diff.render(),
             )
         except Exception as exc:  # noqa: BLE001 - defensive: setup failures must not break parent loop
-            return SubagentResult(
-                ok=False,
-                role=request.role,
-                child_session_id=session_id,
-                summary=f"隔离执行初始化失败：{exc}",
-                error=str(exc),
-                worktree_path=str(worktree.path),
-                worktree_branch=worktree.branch,
+            return self._discard_failed_worktree(
+                manager,
+                worktree,
+                SubagentResult(
+                    ok=False,
+                    role=request.role,
+                    child_session_id=session_id,
+                    summary=f"隔离执行初始化失败：{exc}",
+                    error=str(exc),
+                    worktree_path=str(worktree.path),
+                    worktree_branch=worktree.branch,
+                ),
             )
 
     def create_child_session(self, request: SubagentRequest, *, profile: SubagentProfile) -> AgentSession:
@@ -355,10 +514,11 @@ class SubagentRunner:
             session_id=session_id,
             agents_md=self.agents_md,
             skill_catalog=self.skill_catalog,
-            tools=self._supplied_tools_for_child(profile.role),
+            tools=self._supplied_tools_for_child(request, profile=profile),
             permission_manager=self.permission_manager,
             sandbox_access=self.sandbox_access,
         )
+        self._restrict_child_registry(child, request=request, profile=profile)
         child.writer.append_session_metadata_updated(
             parent_session_id=request.parent_session_id,
             parent_task_hash=request.parent_task_hash,
@@ -369,7 +529,12 @@ class SubagentRunner:
         )
         return child
 
-    def _supplied_tools_for_child(self, role: str) -> list[Tool]:
+    def _supplied_tools_for_child(
+        self,
+        request: SubagentRequest,
+        *,
+        profile: SubagentProfile,
+    ) -> list[Tool]:
         """Tools passed into AgentSession.create, excluding session-reserved tools.
 
         ``retrieve_archive`` is injected by ``create_session_tool_registry`` for
@@ -377,7 +542,7 @@ class SubagentRunner:
         reserved-name guard.
         """
 
-        return [tool for tool in self.tools_for_role(role) if tool.name != "retrieve_archive"]
+        return [tool for tool in self._scope_tools(self.tools, request=request, profile=profile) if tool.name != "retrieve_archive"]
 
     def _create_isolated_child_session(
         self,
@@ -404,10 +569,17 @@ class SubagentRunner:
             session_id=session_id,
             agents_md=self.agents_md,
             skill_catalog=self.skill_catalog,
-            tools=self._worktree_child_tools(worktree.path, profile=profile, access=sandbox_access, for_registry=True),
+            tools=self._worktree_child_tools(
+                worktree.path,
+                request=request,
+                profile=profile,
+                access=sandbox_access,
+                for_registry=True,
+            ),
             permission_manager=permission_manager,
             sandbox_access=sandbox_access,
         )
+        self._restrict_child_registry(child, request=request, profile=profile)
         # Background isolated coder has no interactive user, so per-write review
         # confirmations would deadlock the job.  The worktree diff is reviewed by the
         # parent instead, so disable the pausing prewrite-review path here.
@@ -460,6 +632,7 @@ class SubagentRunner:
         self,
         root,
         *,
+        request: SubagentRequest,
         profile: SubagentProfile,
         access: SandboxAccess,
         for_registry: bool = False,
@@ -480,8 +653,7 @@ class SubagentRunner:
             include_network_tools=True,
             access=access,
         )
-        allowed = profile.allowed_tool_names
-        tools = [tool for tool in registry.tools() if tool.name in allowed and tool.name != "delegate"]
+        tools = self._scope_tools(registry.tools(), request=request, profile=profile)
         if for_registry:
             tools = [tool for tool in tools if tool.name != "retrieve_archive"]
         return tools
@@ -517,10 +689,162 @@ class SubagentRunner:
             f"Task:\n{request.task}"
         )
 
-    def _evidence_refs(self, session_id: str) -> list[str]:
-        """Return stable child-session tool-result event IDs, never model claims."""
+    def _scope_tools(
+        self,
+        tools,
+        *,
+        request: SubagentRequest,
+        profile: SubagentProfile,
+    ) -> list[Tool]:
+        return scope_tools(
+            tools,
+            profile_tool_names=profile.allowed_tool_names,
+            allowed_tool_names=request.allowed_tool_names,
+            allowed_effects=request.allowed_effects,
+        )
 
-        return [event.id for event in self.store.list_events(session_id) if event.type == "tool_result"]
+    def _restrict_child_registry(
+        self,
+        child: AgentSession,
+        *,
+        request: SubagentRequest,
+        profile: SubagentProfile,
+    ) -> None:
+        """Remove session-injected tools outside the effective contract.
+
+        ``AgentSession.create`` installs task/session helpers in addition to the
+        supplied tools.  Rebuilding the same registry interface here is required
+        so those helpers cannot bypass the contract intersection.
+        """
+
+        tools = self._scope_tools(
+            child.tool_registry.tools(),
+            request=request,
+            profile=profile,
+        )
+        registry = ToolRegistry(tools)
+        if child.permission_manager is None:
+            child.tool_registry = registry
+        else:
+            child.tool_registry = PermissionAwareToolRegistry(
+                registry,
+                child.permission_manager,
+            )
+
+    def _observer_for(
+        self,
+        child: AgentSession,
+        *,
+        request: SubagentRequest,
+    ) -> AgentEvoObserver | None:
+        if request.child_run_id is None:
+            return None
+        from bauhinia_agent.agent.evo_observer import AgentEvoObserver
+
+        return AgentEvoObserver(
+            session=child,
+            provider=self.provider,
+            run_id=request.child_run_id,
+            compile_candidates=False,
+        )
+
+    def _completed_result(
+        self,
+        request: SubagentRequest,
+        *,
+        child_session_id: str,
+        summary: str,
+        observer: AgentEvoObserver | None,
+        files_changed: list[str] | None = None,
+        worktree_path: str | None = None,
+        worktree_branch: str | None = None,
+        diff_summary: str | None = None,
+    ) -> SubagentResult:
+        observation = observer.last_result if observer is not None else None
+        evidence = list(observation.evidence_ids) if observation is not None else []
+        confidence, confidence_source, source_event_id = self._confidence_from(observation)
+        ok = True
+        error: str | None = None
+        if observation is not None and observation.outcome in {
+            "failure",
+            "cancelled",
+            "timeout",
+        }:
+            ok = False
+            error = observation.outcome_category or observation.outcome
+        return SubagentResult(
+            ok=ok,
+            role=request.role,
+            child_session_id=child_session_id,
+            summary=summary,
+            evidence=evidence,
+            files_changed=list(files_changed or ()),
+            error=error,
+            worktree_path=worktree_path,
+            worktree_branch=worktree_branch,
+            diff_summary=diff_summary,
+            confidence=confidence,
+            confidence_source=confidence_source,
+            confidence_source_event_id=source_event_id,
+        )
+
+    @staticmethod
+    def _confidence_from(
+        observation: AgentEvoRunResult | None,
+    ) -> tuple[float, str, str | None]:
+        if observation is None or observation.outcome_event_id is None or observation.outcome in {None, "unknown"} or observation.outcome_category in {None, "unknown"}:
+            return 0.0, "unknown", None
+        return (
+            observation.outcome_confidence,
+            "outcome_classified",
+            observation.outcome_event_id,
+        )
+
+    def _cancelled_result(
+        self,
+        request: SubagentRequest,
+        *,
+        child_session_id: str = "",
+        observer: AgentEvoObserver | None = None,
+        diff: WorktreeDiff | None = None,
+        worktree: Worktree | None = None,
+    ) -> SubagentResult:
+        observation = observer.last_result if observer is not None else None
+        return SubagentResult(
+            ok=False,
+            role=request.role,
+            child_session_id=child_session_id,
+            summary="Subagent task was cancelled.",
+            evidence=(list(observation.evidence_ids) if observation is not None else []),
+            files_changed=list(diff.files_changed) if diff is not None else [],
+            error="cancelled",
+            worktree_path=str(worktree.path) if worktree is not None else None,
+            worktree_branch=worktree.branch if worktree is not None else None,
+            diff_summary=diff.render() if diff is not None else None,
+            confidence=0.0,
+            confidence_source="unknown",
+            confidence_source_event_id=None,
+        )
+
+    @staticmethod
+    def _discard_failed_worktree(
+        manager: WorktreeManager,
+        worktree: Worktree,
+        result: SubagentResult,
+    ) -> SubagentResult:
+        """Best-effort reclaim of an isolated failed/cancelled execution."""
+
+        try:
+            manager.discard(worktree)
+        except WorktreeError as error:
+            cleanup = f"worktree_cleanup_failed: {error}"
+            result.error = cleanup if result.error is None else f"{result.error}; {cleanup}"
+            if not worktree.path.exists():
+                result.worktree_path = None
+            return result
+        result.worktree_path = None
+        result.worktree_branch = None
+        return result
 
     def _limits_for(self, request: SubagentRequest) -> AgentLoopLimits:
         requested = request.max_tool_rounds

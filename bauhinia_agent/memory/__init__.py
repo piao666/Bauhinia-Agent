@@ -17,8 +17,33 @@ from bauhinia_agent.memory.models import (
     MemorySensitivity,
     MemoryStatus,
 )
-from bauhinia_agent.memory.service import MemoryService, MemoryWriteDisabledError
-from bauhinia_agent.memory.retrieval import ContextPack, MemoryRetriever, QuerySignature, RetrievalHit
+from bauhinia_agent.memory.projection import (
+    MemoryProjection,
+    MemoryProjectionDiagnostic,
+    MemoryProjectionEntry,
+    build_memory_projection,
+)
+from bauhinia_agent.memory.service import (
+    MemoryActorKind,
+    MemoryDiagnostic,
+    MemoryLifecycleResult,
+    MemoryService,
+    MemoryWriteDisabledError,
+)
+from bauhinia_agent.memory.retrieval import (
+    ContextOmission,
+    ContextPack,
+    ContextPackDiagnostic,
+    ContextPackItem,
+    HeuristicTokenEstimator,
+    MemoryAccessAuthorization,
+    MemoryRetriever,
+    MemoryUseDiagnostic,
+    MemoryUseResult,
+    QuerySignature,
+    RetrievalHit,
+    TokenEstimator,
+)
 
 __all__ = [
     "MEMORY_LAYER_RULES",
@@ -33,10 +58,25 @@ __all__ = [
     "MemoryScope",
     "MemorySensitivity",
     "MemoryStatus",
+    "MemoryActorKind",
+    "MemoryDiagnostic",
+    "MemoryLifecycleResult",
+    "MemoryProjection",
+    "MemoryProjectionDiagnostic",
+    "MemoryProjectionEntry",
     "MemoryService",
     "MemoryWriteDisabledError",
     "ContextPack",
+    "ContextPackDiagnostic",
+    "ContextPackItem",
+    "ContextOmission",
+    "HeuristicTokenEstimator",
+    "MemoryAccessAuthorization",
     "MemoryRetriever",
+    "MemoryUseDiagnostic",
+    "MemoryUseResult",
     "QuerySignature",
     "RetrievalHit",
+    "TokenEstimator",
+    "build_memory_projection",
 ]

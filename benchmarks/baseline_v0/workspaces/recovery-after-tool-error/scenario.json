@@ -1,0 +1,6 @@
+{
+  "case_id": "recovery-after-tool-error",
+  "kind": "observed_value",
+  "observed": "recovered_after_retry",
+  "expected": "recovered_after_retry"
+}

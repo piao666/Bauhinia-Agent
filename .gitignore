@@ -30,6 +30,8 @@ data/
 docs/promo/
 /docs/item_px/
 /evaluation/
+/benchmarks/baseline_v0/runs/
+/benchmarks/agent_baseline_v0/runs/
 *.doc
 *.docx
 *.docm

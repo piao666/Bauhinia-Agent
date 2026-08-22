@@ -58,6 +58,7 @@ class EvalObservation:
 class EvalRunInput:
     """Public evaluator input; it deliberately has no private reference answer."""
 
+    run_id: str
     case_id: str
     corpus_id: str
     corpus_version: str

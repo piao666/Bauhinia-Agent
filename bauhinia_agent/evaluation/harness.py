@@ -5,10 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from bauhinia_agent.evaluation.models import EvalCase, EvalObservation, EvalRunInput, EvalVariant, Evaluator
+from bauhinia_agent.evaluation.evidence import EvaluationEvidenceError, attest_evaluation_evidence
 from bauhinia_agent.evolution.evidence import redact_text
 from bauhinia_agent.evolution.events import (
     CandidateArtifactCreatedPayload,
@@ -72,10 +73,14 @@ class EvalHarness:
         variant_hash = _variant_hash(variant)
         trial_key = _trial_key(case, variant_hash, evaluator_version, seed)
         attempt = 1 + sum(event.event_type == "EvaluationTrialRecorded" and isinstance(event.payload, EvaluationTrialRecordedPayload) and event.payload.trial_key == trial_key for event in events)
+        trial_id = new_evo_id("eval_trial")
+        run_id = new_evo_id("run")
         diagnostic = None
+        evidence_integrity_valid: bool | None = None
         try:
             observation = evaluator.evaluate(
                 EvalRunInput(
+                    run_id=run_id,
                     case_id=case.case_id,
                     corpus_id=case.corpus_id,
                     corpus_version=case.corpus_version,
@@ -96,9 +101,36 @@ class EvalHarness:
                 invalid_reasons=("Evaluator failed before producing a valid observation.",),
             )
             diagnostic = EvalDiagnostic("evaluator_failure", redact_text(str(error))[0])
-
-        trial_id = new_evo_id("eval_trial")
-        run_id = new_evo_id("run")
+        else:
+            if observation.evaluation_status == "completed":
+                expected_success = observation.task_outcome == "task_success"
+                try:
+                    attestation = attest_evaluation_evidence(
+                        self._store.list_events(),
+                        observation.evidence_refs,
+                        run_id=run_id,
+                        expected_success=expected_success,
+                        reported_evidence_success=observation.evidence_success,
+                        reported_commands=observation.verification_commands,
+                    )
+                except EvaluationEvidenceError as error:
+                    evidence_integrity_valid = False
+                    message = redact_text(str(error))[0]
+                    observation = replace(
+                        observation,
+                        task_outcome="not_run",
+                        evaluation_status="invalid",
+                        evidence_success=None,
+                        invalid_reasons=(*observation.invalid_reasons, message),
+                    )
+                    diagnostic = EvalDiagnostic("invalid_evidence", message)
+                else:
+                    evidence_integrity_valid = True
+                    observation = replace(
+                        observation,
+                        evidence_success=attestation.success,
+                        verification_commands=attestation.commands,
+                    )
         payload = _payload(
             trial_id=trial_id,
             trial_key=trial_key,
@@ -110,6 +142,7 @@ class EvalHarness:
             held_out_audit_version=getattr(evaluator, "held_out_audit_version", None),
             seed=seed,
             observation=observation,
+            evidence_integrity_valid=evidence_integrity_valid,
         )
         parent_event_id = _artifact_event_id(events, variant.artifact_id)
         event = EvoEvent(
@@ -232,9 +265,10 @@ def _payload(
     held_out_audit_version: object,
     seed: int,
     observation: EvalObservation,
+    evidence_integrity_valid: bool | None,
 ) -> EvaluationTrialRecordedPayload:
     success = None
-    if observation.task_outcome in {"task_success", "task_failure"}:
+    if observation.evaluation_status == "completed" and observation.task_outcome in {"task_success", "task_failure"}:
         success = observation.task_outcome == "task_success"
     return EvaluationTrialRecordedPayload(
         evaluation_schema_version=EVALUATION_SCHEMA_VERSION,
@@ -275,6 +309,7 @@ def _payload(
         extensions={
             "harness_version": "p8-001",
             "private_reference_exposed": False,
+            **({"evidence_integrity_valid": evidence_integrity_valid} if evidence_integrity_valid is not None else {}),
             **({"held_out_audit_version": held_out_audit_version} if isinstance(held_out_audit_version, str) and held_out_audit_version else {}),
         },
     )

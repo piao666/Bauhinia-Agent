@@ -1,0 +1,6 @@
+{
+  "case_id": "tool-invalid-arguments",
+  "kind": "observed_value",
+  "observed": "unclassified",
+  "expected": "tool_error"
+}

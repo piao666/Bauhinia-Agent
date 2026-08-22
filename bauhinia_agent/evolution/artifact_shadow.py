@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from bauhinia_agent.evolution.candidate_artifacts import CandidateArtifactError, CandidateArtifactRecord
-from bauhinia_agent.evolution.evidence import redact_text
+from bauhinia_agent.evolution.evidence import (
+    EvidenceIntegrityError,
+    EvidenceRecord,
+    redact_text,
+    resolve_evidence_records,
+)
 from bauhinia_agent.evolution.events import (
     CandidateArtifactControlChangedPayload,
     CandidateArtifactCreatedPayload,
@@ -147,6 +152,10 @@ class ArtifactShadowService:
     def record_trial(self, spec: ShadowTrialSpec) -> ShadowTrialResult:
         _validate_trial(spec)
         events = self._store.list_events()
+        evidence = _resolve_shadow_evidence(events, spec.evidence_refs)
+        evidence_success = all(record.payload.exit_code == 0 for record in evidence)
+        if evidence_success != spec.passed:
+            raise ArtifactShadowError("Shadow passed result conflicts with canonical Evidence exit codes")
         state = _shadow_state(events)
         artifact = state.artifacts.get(spec.artifact_id)
         if artifact is None:
@@ -174,7 +183,7 @@ class ArtifactShadowService:
             event_id=new_evo_id("event"),
             event_type="CandidateShadowTrialRecorded",
             refs=EvoReferences(
-                run_id=artifact.run_id,
+                run_id=evidence[0].run_id,
                 artifact_id=artifact.artifact_id,
                 parent_event_id=_latest_related_event_id(events, artifact.artifact_id) or artifact.event_id,
             ),
@@ -185,6 +194,7 @@ class ArtifactShadowService:
     def control(self, request: ArtifactControlRequest) -> ArtifactControlResult:
         _validate_control(request)
         events = self._store.list_events()
+        evidence = _resolve_control_evidence(events, request.evidence_refs)
         state = _shadow_state(events)
         artifact = state.artifacts.get(request.artifact_id)
         if artifact is None:
@@ -220,7 +230,7 @@ class ArtifactShadowService:
             event_id=new_evo_id("event"),
             event_type="CandidateArtifactControlChanged",
             refs=EvoReferences(
-                run_id=artifact.run_id,
+                run_id=evidence[0].run_id,
                 artifact_id=artifact.artifact_id,
                 parent_event_id=_latest_related_event_id(events, artifact.artifact_id) or artifact.event_id,
             ),
@@ -310,6 +320,42 @@ def _evidence_refs(values: tuple[str, ...]) -> None:
         require_evo_id(value, field="evidence_refs[]", kind="evidence")
     if len(set(values)) != len(values):
         raise ArtifactShadowError("evidence_refs must be unique")
+
+
+def _resolve_shadow_evidence(
+    events: list[EvoEvent],
+    evidence_refs: tuple[str, ...],
+) -> tuple[EvidenceRecord, ...]:
+    try:
+        records = resolve_evidence_records(
+            events,
+            evidence_refs,
+            require_verified=True,
+            deterministic_only=True,
+            require_exit_code=True,
+        )
+    except (EvidenceIntegrityError, ValueError) as error:
+        raise ArtifactShadowError(f"Shadow Evidence is invalid: {error}") from error
+    if len({record.run_id for record in records}) != 1:
+        raise ArtifactShadowError("Shadow Evidence must belong to one Run")
+    return records
+
+
+def _resolve_control_evidence(
+    events: list[EvoEvent],
+    evidence_refs: tuple[str, ...],
+) -> tuple[EvidenceRecord, ...]:
+    try:
+        records = resolve_evidence_records(
+            events,
+            evidence_refs,
+            require_verified=True,
+        )
+    except (EvidenceIntegrityError, ValueError) as error:
+        raise ArtifactShadowError(f"Artifact control Evidence is invalid: {error}") from error
+    if len({record.run_id for record in records}) != 1:
+        raise ArtifactShadowError("Artifact control Evidence must belong to one Run")
+    return records
 
 
 def _shadow_state(events: list[EvoEvent]) -> _ShadowState:

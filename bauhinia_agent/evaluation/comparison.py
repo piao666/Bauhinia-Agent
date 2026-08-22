@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
-from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import dataclass, replace
+from typing import Mapping, Protocol
 
 from bauhinia_agent.evolution.events import (
     CandidateArtifactCreatedPayload,
@@ -98,8 +98,9 @@ class EvaluationComparisonService:
         candidate_all = tuple(event for event in selected if event.payload.variant_id == spec.candidate_variant_id)
         if any(event.payload.artifact_id != spec.artifact_id or event.payload.artifact_version != spec.artifact_version for event in candidate_all):
             raise EvaluationComparisonError("candidate Trials do not match the requested Artifact version")
-        baseline = tuple(event for event in baseline_all if _is_valid_trial(event.payload))
-        candidate = tuple(event for event in candidate_all if _is_valid_trial(event.payload))
+        evidence_errors = {event.event_id: error for event in selected if (error := _trial_evidence_error(event, events)) is not None}
+        baseline = tuple(event for event in baseline_all if _is_valid_trial(event.payload) and event.event_id not in evidence_errors)
+        candidate = tuple(event for event in candidate_all if _is_valid_trial(event.payload) and event.event_id not in evidence_errors)
         invalid_count = len(selected) - len(baseline) - len(candidate)
         reasons = _blocking_reasons(spec, baseline_all, candidate_all, baseline, candidate, invalid_count)
         if not any(
@@ -112,7 +113,8 @@ class EvaluationComparisonService:
             reasons.append("Comparison requires a registered immutable Corpus version.")
         if any(event.payload.extensions.get("held_out_audit_version") != "v1" for event in selected):
             reasons.append("Every selected Trial must pass the held-out audit service.")
-        integrity = _integrity_violations(baseline, candidate)
+        integrity = [f"Trial Evidence integrity failed: {message}" for message in dict.fromkeys(evidence_errors.values())]
+        integrity.extend(_integrity_violations(baseline, candidate))
         reasons.extend(integrity)
         case_ids = tuple(sorted({event.payload.case_id for event in (*baseline_all, *candidate_all)}))
         baseline_success = _success_rate(baseline)
@@ -157,6 +159,7 @@ class EvaluationComparisonService:
                 "comparison_version": "p8-003",
                 "metrics_aggregated_separately": True,
                 "automatic_promotion": False,
+                "canonical_evidence_required": True,
                 "thresholds": {
                     "minimum_cases": spec.thresholds.minimum_cases,
                     "minimum_repeats": spec.thresholds.minimum_repeats,
@@ -208,6 +211,129 @@ class EvaluationComparisonService:
             and isinstance(event.payload, EvaluationComparisonCompletedPayload)
             and (artifact_id is None or event.payload.artifact_id == artifact_id)
         )
+
+
+def validate_comparison_report_facts(
+    events: list[EvoEvent],
+    report: EvoEvent[EvaluationComparisonCompletedPayload],
+) -> None:
+    """Recompute one report from facts that existed before it was appended.
+
+    ``EvaluationComparisonCompleted`` is a derived fact, not an authority of
+    its own.  Lifecycle gates therefore replay the deterministic comparison at
+    the report's sequence boundary and require the complete payload and event
+    references to match.  Later Trials also make the report stale.
+    """
+
+    if report.sequence is None:
+        raise EvaluationComparisonError("persisted comparison report has no sequence")
+    matches = [event for event in events if event.event_id == report.event_id]
+    if len(matches) != 1 or matches[0] != report:
+        raise EvaluationComparisonError("comparison report is not the canonical persisted event")
+    if any(event.sequence is None for event in events):
+        raise EvaluationComparisonError("comparison facts contain an unsequenced event")
+    prior = sorted(
+        (event for event in events if event.sequence is not None and event.sequence < report.sequence),
+        key=lambda event: event.sequence or 0,
+    )
+    spec = _spec_from_report(report.payload)
+    stale_trials = [
+        event
+        for event in events
+        if event.sequence is not None
+        and event.sequence > report.sequence
+        and event.event_type == "EvaluationTrialRecorded"
+        and isinstance(event.payload, EvaluationTrialRecordedPayload)
+        and event.payload.corpus_id == spec.corpus_id
+        and event.payload.corpus_version == spec.corpus_version
+        and event.payload.evaluator_version == spec.evaluator_version
+        and event.payload.variant_id in {spec.baseline_variant_id, spec.candidate_variant_id}
+    ]
+    if stale_trials:
+        raise EvaluationComparisonError("comparison report is stale because matching Trials were appended later")
+    replay = _ComparisonReplayStore(prior)
+    try:
+        result = EvaluationComparisonService(replay).compare(spec)
+    except (EvaluationComparisonError, ValueError) as error:
+        raise EvaluationComparisonError(f"comparison report facts cannot be recomputed: {error}") from error
+    if result.report is None or replay.appended is None:
+        message = result.diagnostic.message if result.diagnostic is not None else "comparison replay produced no report"
+        raise EvaluationComparisonError(message)
+    expected_payload = replace(
+        replay.appended.payload,
+        report_id=report.payload.report_id,
+    )
+    expected_refs = replace(
+        replay.appended.refs,
+        evaluation_id=report.payload.report_id,
+    )
+    if report.payload != expected_payload or report.refs != expected_refs:
+        raise EvaluationComparisonError("comparison report payload or references do not match prior Trial facts")
+
+
+class _ComparisonReplayStore:
+    """In-memory append target used only for deterministic report replay."""
+
+    def __init__(self, events: list[EvoEvent]) -> None:
+        self._events = tuple(events)
+        self.appended: EvoEvent[EvaluationComparisonCompletedPayload] | None = None
+
+    def list_events(self) -> list[EvoEvent]:
+        return list(self._events)
+
+    def append(
+        self,
+        event: EvoEvent[EvaluationComparisonCompletedPayload],
+    ) -> EvoAppendResult:
+        persisted = replace(event, sequence=len(self._events) + 1)
+        self.appended = persisted
+        return EvoAppendResult(event=persisted, projection_applied=True)
+
+
+def _spec_from_report(
+    payload: EvaluationComparisonCompletedPayload,
+) -> EvaluationComparisonSpec:
+    raw = payload.extensions.get("thresholds")
+    expected_keys = {
+        "minimum_cases",
+        "minimum_repeats",
+        "minimum_success_delta",
+        "maximum_cost_ratio",
+        "maximum_latency_ratio",
+        "maximum_uncertainty",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != expected_keys:
+        raise EvaluationComparisonError("comparison report has no complete threshold provenance")
+
+    def integer(name: str) -> int:
+        value = raw[name]
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise EvaluationComparisonError(f"comparison threshold {name} must be an integer")
+        return value
+
+    def number(name: str) -> float:
+        value = raw[name]
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise EvaluationComparisonError(f"comparison threshold {name} must be numeric")
+        return float(value)
+
+    return EvaluationComparisonSpec(
+        artifact_id=payload.artifact_id,
+        artifact_version=payload.artifact_version,
+        corpus_id=payload.corpus_id,
+        corpus_version=payload.corpus_version,
+        evaluator_version=payload.evaluator_version,
+        baseline_variant_id=payload.baseline_variant_id,
+        candidate_variant_id=payload.candidate_variant_id,
+        thresholds=PromotionThresholds(
+            minimum_cases=integer("minimum_cases"),
+            minimum_repeats=integer("minimum_repeats"),
+            minimum_success_delta=number("minimum_success_delta"),
+            maximum_cost_ratio=number("maximum_cost_ratio"),
+            maximum_latency_ratio=number("maximum_latency_ratio"),
+            maximum_uncertainty=number("maximum_uncertainty"),
+        ),
+    )
 
 
 def _validate_spec(
@@ -350,6 +476,39 @@ def _integrity_violations(
 
 def _is_valid_trial(payload: EvaluationTrialRecordedPayload) -> bool:
     return payload.evaluation_status == "completed" and payload.split == "held_out"
+
+
+def _trial_evidence_error(
+    event: EvoEvent[EvaluationTrialRecordedPayload],
+    events: list[EvoEvent],
+) -> str | None:
+    from bauhinia_agent.evaluation.evidence import (
+        EvaluationEvidenceError,
+        attest_evaluation_evidence,
+    )
+
+    payload = event.payload
+    if payload.extensions.get("evidence_integrity_valid") is False:
+        return "; ".join(payload.invalid_reasons) or "Trial Evidence failed validation"
+    if not _is_valid_trial(payload):
+        return None
+    if payload.success is None:
+        return "completed Trial has no success result"
+    if payload.success != (payload.task_outcome == "task_success"):
+        return "completed Trial success conflicts with task_outcome"
+    try:
+        attest_evaluation_evidence(
+            events,
+            payload.evidence_refs,
+            run_id=event.refs.run_id,
+            expected_success=payload.success,
+            reported_evidence_success=payload.evidence_success,
+            reported_commands=payload.verification_commands,
+            before_sequence=event.sequence,
+        )
+    except EvaluationEvidenceError as error:
+        return str(error)
+    return None
 
 
 def _missing_metrics(payload: EvaluationTrialRecordedPayload) -> bool:

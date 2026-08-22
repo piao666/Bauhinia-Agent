@@ -1,0 +1,6 @@
+{
+  "case_id": "provider-timeout",
+  "kind": "observed_value",
+  "observed": "timeout",
+  "expected": "timeout"
+}

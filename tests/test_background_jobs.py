@@ -245,16 +245,22 @@ def test_manager_cancel_before_start_marks_cancelled() -> None:
     manager = BackgroundJobManager(max_jobs=4, max_workers=1)
     gate = threading.Event()
     started = threading.Event()
+    cancellation_callbacks: list[tuple[str, str]] = []
     try:
         manager.start(
             lambda: (started.set(), gate.wait(5), make_text_result("shell", "first"))[2],
             tool_name="shell",
         )
         assert started.wait(timeout=5) is True
-        queued = manager.start(lambda: make_text_result("shell", "second"), tool_name="shell")
+        queued = manager.start(
+            lambda: make_text_result("shell", "second"),
+            tool_name="shell",
+            on_cancelled=lambda job: cancellation_callbacks.append((job.id, job.status)),
+        )
         cancelled = manager.cancel(queued.id)
         assert cancelled is not None
         assert cancelled.status == "cancelled"
+        assert cancellation_callbacks == [(queued.id, "cancelled")]
         notes = {note.job_id: note for note in manager.collect_completed()}
         assert notes[queued.id].status == "cancelled"
     finally:

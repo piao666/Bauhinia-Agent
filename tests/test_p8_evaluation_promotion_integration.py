@@ -23,16 +23,44 @@ from bauhinia_agent.evolution.candidate_artifacts import (
     CandidateArtifactRegistry,
 )
 from bauhinia_agent.evolution.candidate_review import CandidateReview, CandidateReviewService
+from bauhinia_agent.evolution.evidence import EvidenceAdapter, EvidenceInput
 from bauhinia_agent.evolution.events import EvoEvent, EvoReferences, ExperienceCandidateCreatedPayload
 from bauhinia_agent.evolution.identifiers import new_evo_id
-from bauhinia_agent.evolution.promotion import CandidateLifecycleService, PromotionGate
+from bauhinia_agent.evolution.promotion import (
+    CandidateLifecycleService,
+    PromotionGate,
+    PromotionReviewerIdentity,
+)
 from bauhinia_agent.evolution.store import EvoEventStore
+
+
+class _OwnerIdentityProvider:
+    def current_reviewer(self) -> PromotionReviewerIdentity:
+        return PromotionReviewerIdentity(
+            subject="repository-owner",
+            role="owner",
+            authenticated_by="integration_test_auth",
+        )
+
+
 from bauhinia_agent.skills.discovery import discover_project_skills
 
 
 def test_p8_gate_promotes_only_after_repeated_held_out_comparison_and_human_approval(tmp_path: Path) -> None:
     store = EvoEventStore(tmp_path / ".bauhinia-agent")
     artifact_id = _reviewed_artifact(store)
+    shadow_evidence = EvidenceAdapter(store).record(
+        EvidenceInput(
+            run_id=new_evo_id("run"),
+            evidence_type="test",
+            source="pytest",
+            summary="Shadow verification passed",
+            verified=True,
+            command="pytest -q",
+            exit_code=0,
+        )
+    )
+    assert shadow_evidence.evidence is not None
     shadow = ArtifactShadowService(store).record_trial(
         ShadowTrialSpec(
             artifact_id=artifact_id,
@@ -42,12 +70,15 @@ def test_p8_gate_promotes_only_after_repeated_held_out_comparison_and_human_appr
             environment_hash="c" * 64,
             baseline_summary="Baseline suggestion recorded.",
             candidate_summary="Candidate suggestion recorded without execution.",
-            evidence_refs=(new_evo_id("evidence"),),
+            evidence_refs=(shadow_evidence.evidence.evidence_id,),
             passed=True,
         )
     )
     assert shadow.trial is not None
-    lifecycle = CandidateLifecycleService(store)
+    lifecycle = CandidateLifecycleService(
+        store,
+        identity_provider=_OwnerIdentityProvider(),
+    )
     assert lifecycle.start_shadow(
         artifact_id,
         reviewer="curator",
@@ -71,7 +102,7 @@ def test_p8_gate_promotes_only_after_repeated_held_out_comparison_and_human_appr
         artifact_id=artifact_id,
         artifact_version=1,
     )
-    evaluator = _GateEvaluator()
+    evaluator = _GateEvaluator(store)
     held_out = HeldOutEvalHarness(store)
     trial_run_ids: list[str] = []
     for item in manifest.cases:
@@ -212,14 +243,29 @@ def _promotion_events(store: EvoEventStore) -> tuple[EvoEvent, ...]:
 class _GateEvaluator:
     version = "gate-evaluator-v1"
 
+    def __init__(self, store: EvoEventStore) -> None:
+        self._evidence = EvidenceAdapter(store)
+
     def evaluate(self, request: EvalRunInput) -> EvalObservation:
         candidate = request.variant.kind == "candidate"
+        recorded = self._evidence.record(
+            EvidenceInput(
+                run_id=request.run_id,
+                evidence_type="test",
+                source="pytest",
+                summary="held-out verification passed" if candidate else "held-out verification failed",
+                verified=True,
+                command="pytest -q",
+                exit_code=0 if candidate else 1,
+            )
+        )
+        assert recorded.persisted and recorded.evidence is not None
         return EvalObservation(
             task_outcome="task_success" if candidate else "task_failure",
             verification_quality=1.0 if candidate else 0.9,
             cost=11.0 if candidate else 10.0,
             latency_ms=110.0 if candidate else 100.0,
-            evidence_refs=(new_evo_id("evidence"),),
+            evidence_refs=(recorded.evidence.evidence_id,),
             verification_commands=("pytest -q",),
             verification_coverage=1.0,
             claimed_success=candidate,

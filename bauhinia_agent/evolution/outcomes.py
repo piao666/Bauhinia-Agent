@@ -6,8 +6,18 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Literal, Protocol
 
-from bauhinia_agent.evolution.evidence import EvidenceAdapter, EvidenceRecord
-from bauhinia_agent.evolution.events import EvoEvent, EvoReferences, OutcomeClassifiedPayload
+from bauhinia_agent.evolution.evidence import (
+    EvidenceAdapter,
+    EvidenceIntegrityError,
+    EvidenceRecord,
+    resolve_evidence_records,
+)
+from bauhinia_agent.evolution.events import (
+    EvidenceRecordedPayload,
+    EvoEvent,
+    EvoReferences,
+    OutcomeClassifiedPayload,
+)
 from bauhinia_agent.evolution.identifiers import new_evo_id, require_evo_id
 from bauhinia_agent.evolution.store import EvoAppendResult, EvoEventStore, EvoStoreError
 
@@ -28,6 +38,10 @@ OutcomeCategory = Literal[
 
 class OutcomeError(ValueError):
     """Raised when an outcome event cannot satisfy its domain contract."""
+
+
+class OutcomeIntegrityError(OutcomeError):
+    """Raised when a persisted Outcome does not match its prior Evidence facts."""
 
 
 class _OutcomeStore(Protocol):
@@ -118,6 +132,50 @@ class OutcomeClassifier:
         return records
 
 
+def attest_outcome_event(
+    events: list[EvoEvent] | tuple[EvoEvent, ...],
+    outcome_event: EvoEvent,
+) -> tuple[EvidenceRecord, ...]:
+    """Recompute a persisted Outcome from all prior Evidence in its Run.
+
+    The Outcome is a derived fact, so consumers must not trust a caller-authored
+    payload.  Requiring the exact prior Evidence inventory also prevents an
+    Outcome from omitting a failure or acquiring Evidence appended later.
+    """
+
+    if outcome_event.event_type != "OutcomeClassified" or not isinstance(outcome_event.payload, OutcomeClassifiedPayload):
+        raise OutcomeIntegrityError("source event is not OutcomeClassified")
+    if outcome_event.sequence is None:
+        raise OutcomeIntegrityError("OutcomeClassified must have a persisted sequence")
+    run_id = require_evo_id(outcome_event.refs.run_id, field="run_id", kind="run")
+    prior_evidence_ids = tuple(
+        event.refs.evidence_id
+        for event in events
+        if event.event_type == "EvidenceRecorded"
+        and isinstance(event.payload, EvidenceRecordedPayload)
+        and event.refs.run_id == run_id
+        and event.refs.evidence_id is not None
+        and event.sequence is not None
+        and event.sequence < outcome_event.sequence
+    )
+    if outcome_event.payload.evidence_refs != prior_evidence_ids:
+        raise OutcomeIntegrityError("Outcome Evidence references must exactly match all prior Evidence in the Run")
+    try:
+        records = resolve_evidence_records(
+            events,
+            prior_evidence_ids,
+            run_id=run_id,
+            before_sequence=outcome_event.sequence,
+        )
+    except (EvidenceIntegrityError, ValueError) as error:
+        raise OutcomeIntegrityError(f"Outcome Evidence is invalid: {error}") from error
+    classification = _classify(list(records))
+    payload = outcome_event.payload
+    if payload.outcome != classification.outcome or payload.category != classification.category or payload.confidence != classification.confidence or payload.summary != classification.summary:
+        raise OutcomeIntegrityError("Outcome payload does not match deterministic classification of prior Evidence")
+    return records
+
+
 def _classify(evidence: list[EvidenceRecord]) -> _Classification:
     if _matches(evidence, lambda record, text: record.evidence_type == "permission" and _has(text, "deny", "denied", "reject", "rejected")):
         return _result("failure", "permission_denied", 0.99, evidence)
@@ -127,8 +185,7 @@ def _classify(evidence: list[EvidenceRecord]) -> _Classification:
         return _result("timeout", "timeout", 0.98, evidence)
     if _matches(
         evidence,
-        lambda record, text: ("eval" in record.payload.source.lower() or "evaluator" in record.payload.source.lower())
-        and _has(text, "infrastructure", "unavailable", "runner", "evaluator"),
+        lambda record, text: ("eval" in record.payload.source.lower() or "evaluator" in record.payload.source.lower()) and _has(text, "infrastructure", "unavailable", "runner", "evaluator"),
     ):
         return _result("failure", "evaluation_infrastructure_failure", 0.95, evidence)
     if _matches(evidence, lambda _record, text: _has(text, "network unavailable", "dns", "connection refused", "environment unavailable")):
@@ -137,17 +194,14 @@ def _classify(evidence: list[EvidenceRecord]) -> _Classification:
         return _result("failure", "tool_failure", 0.90, evidence)
     if _matches(
         evidence,
-        lambda record, text: record.evidence_type in {"test", "lint", "type_check", "build", "diff"}
-        and (record.payload.exit_code not in {None, 0} or _has(text, "failed", "failure")),
+        lambda record, text: record.evidence_type in {"test", "lint", "type_check", "build", "diff"} and (record.payload.exit_code not in {None, 0} or _has(text, "failed", "failure")),
     ):
         return _result("failure", "verification_failure", 0.95, evidence)
     if _matches(evidence, lambda _record, text: _has(text, "task failed", "acceptance failed")):
         return _result("failure", "task_failure", 0.75, evidence)
     if _matches(
         evidence,
-        lambda record, _text: record.evidence_type in {"test", "lint", "type_check", "build", "diff"}
-        and record.payload.verified
-        and record.payload.exit_code == 0,
+        lambda record, _text: record.evidence_type in {"test", "lint", "type_check", "build", "diff"} and record.payload.verified and record.payload.exit_code == 0,
     ):
         return _result("success", "task_success", 0.95, evidence)
     return _result("unknown", "unknown", 0.20 if evidence else 0.0, evidence)

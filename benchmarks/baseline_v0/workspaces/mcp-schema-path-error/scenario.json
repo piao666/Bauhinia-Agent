@@ -1,0 +1,6 @@
+{
+  "case_id": "mcp-schema-path-error",
+  "kind": "observed_value",
+  "observed": "args.path:type_error",
+  "expected": "args.path:type_error"
+}

@@ -12,9 +12,7 @@ def test_diagnosis_summarizes_verification_failure_with_evidence(tmp_path) -> No
     evidence = EvidenceAdapter(store)
     classifier = OutcomeClassifier(store)
     run_id = new_evo_id("run")
-    recorded = evidence.record(
-        EvidenceInput(run_id=run_id, evidence_type="test", source="pytest", summary="test_api_login failed", exit_code=1, verified=True)
-    )
+    recorded = evidence.record(EvidenceInput(run_id=run_id, evidence_type="test", source="pytest", summary="test_api_login failed", exit_code=1, verified=True))
     classifier.classify(run_id)
 
     diagnosis = DiagnosisService(store).diagnose(run_id)

@@ -1,0 +1,6 @@
+{
+  "case_id": "cancel-child-work",
+  "kind": "observed_value",
+  "observed": "cancelled",
+  "expected": "cancelled"
+}

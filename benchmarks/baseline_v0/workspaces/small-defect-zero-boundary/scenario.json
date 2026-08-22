@@ -1,0 +1,8 @@
+{
+  "case_id": "small-defect-zero-boundary",
+  "kind": "python_call",
+  "module": "app.py",
+  "function": "is_valid_count",
+  "args": [0],
+  "expected": true
+}

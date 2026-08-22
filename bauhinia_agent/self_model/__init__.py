@@ -25,6 +25,17 @@ from bauhinia_agent.self_model.service import (
     SelfModelDiagnostic,
     SelfModelService,
 )
+from bauhinia_agent.self_model.runtime import (
+    RUNTIME_EVALUATOR_VERSION,
+    RuntimeTaskClassifier,
+    SelfModelObservationReceipt,
+    SelfModelPlanningSnapshot,
+    SelfModelRuntime,
+    SelfModelRuntimeDiagnostic,
+    create_self_model_runtime,
+    render_system_advisory,
+    render_user_snapshot,
+)
 
 __all__ = [
     "MIN_PROFILE_SAMPLES",
@@ -36,14 +47,23 @@ __all__ = [
     "ProfileSelector",
     "ProfileStatus",
     "RepositoryScale",
+    "RUNTIME_EVALUATOR_VERSION",
     "RiskLevel",
+    "RuntimeTaskClassifier",
     "SelfModelDiagnostic",
     "SelfModelError",
     "SelfModelObservation",
+    "SelfModelObservationReceipt",
+    "SelfModelPlanningSnapshot",
     "SelfModelProfile",
+    "SelfModelRuntime",
+    "SelfModelRuntimeDiagnostic",
     "SelfModelService",
     "SuggestionAction",
     "SuggestionSeverity",
     "TaskClassification",
     "VerificationLevel",
+    "create_self_model_runtime",
+    "render_system_advisory",
+    "render_user_snapshot",
 ]

@@ -5,10 +5,13 @@ import json
 import pytest
 
 from bauhinia_agent.evolution.events import (
+    ContextPackRecordedPayload,
     DecisionRecordedPayload,
     EvoEvent,
     EvoEventError,
     EvoReferences,
+    MemoryLifecycleChangedPayload,
+    MemoryUsedPayload,
     PlanCreatedPayload,
     UnknownEvoPayload,
 )
@@ -24,6 +27,52 @@ def _refs(**overrides: object) -> EvoReferences:
     }
     values.update(overrides)
     return EvoReferences(**values)
+
+
+def _memory_lifecycle_payload(action: str) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "lifecycle_schema_version": "v1",
+        "change_id": f"change_{action}",
+        "project_id": "project_1",
+        "action": action,
+        "memory_ids": ["memory_1"],
+        "reason": f"Review requested {action}.",
+        "evidence_refs": ["evidence_1"],
+        "actor_kind": "system",
+        "actor_id": "memory_service",
+        "basis_event_ids": ["event_memory_1"],
+    }
+    if action == "supersede":
+        payload["replacement_memory_id"] = "memory_2"
+    elif action == "propose_merge":
+        payload["memory_ids"] = ["memory_1", "memory_2"]
+        payload["proposal_memory_id"] = "memory_3"
+        payload["basis_event_ids"] = ["event_memory_1", "event_memory_2"]
+    elif action == "confirm":
+        payload["actor_kind"] = "user"
+        payload["actor_id"] = "user_1"
+        payload["confirmed_by_user_id"] = "user_1"
+    return payload
+
+
+def _context_pack_payload() -> dict[str, object]:
+    return {
+        "context_pack_schema_version": "v1",
+        "context_pack_id": "context_pack_1",
+        "query_signature_hash": "a" * 64,
+        "token_budget": 128,
+        "used_tokens": 96,
+        "estimator_id": "deterministic_chars_v1",
+        "selected_memory_ids": ["memory_1", "memory_2"],
+        "selected_ranks": [1, 2],
+        "selected_original_token_costs": [64, 80],
+        "selected_packed_token_costs": [64, 32],
+        "selected_truncated": [False, True],
+        "selected_start_offsets": [0, 0],
+        "selected_end_offsets": [64, 32],
+        "omitted_memory_ids": ["memory_3"],
+        "omitted_reasons": ["token_budget_exhausted"],
+    }
 
 
 def test_event_json_is_stable_and_preserves_parent_relationship() -> None:
@@ -96,6 +145,8 @@ def test_known_event_payloads_are_explicit_and_round_trip() -> None:
         "EvidenceRecorded": {"evidence_type": "test", "source": "pytest", "summary": "passed"},
         "OutcomeClassified": {"outcome": "success", "category": "task", "summary": "done"},
         "MemoryCreated": {"memory_type": "semantic", "content": "fact", "scope": "project", "confidence": 0.8, "source_event_ids": ["event_1"]},
+        "MemoryLifecycleChanged": _memory_lifecycle_payload("invalidate"),
+        "ContextPackRecorded": _context_pack_payload(),
         "MemoryUsed": {"reason": "matched project scope"},
         "ExperienceCandidateCreated": {
             "kind": "plan_template",
@@ -325,6 +376,218 @@ def test_known_event_payloads_are_explicit_and_round_trip() -> None:
         assert restored.payload.to_dict() == event.payload.to_dict()
 
 
+@pytest.mark.parametrize("action", ["supersede", "invalidate", "propose_merge", "confirm"])
+def test_memory_lifecycle_actions_round_trip(action: str) -> None:
+    raw = {
+        "event_id": f"event_{action}",
+        "event_type": "MemoryLifecycleChanged",
+        "schema_version": "v1",
+        "occurred_at": "2026-08-01T00:00:00Z",
+        "sequence": 1,
+        "refs": {"run_id": "run_1", "memory_id": "memory_1"},
+        "payload": _memory_lifecycle_payload(action),
+    }
+
+    event = EvoEvent.from_dict(raw)
+
+    assert isinstance(event.payload, MemoryLifecycleChangedPayload)
+    assert event.payload.action == action
+    assert EvoEvent.from_json(event.to_json()) == event
+
+
+def test_memory_lifecycle_unknown_payload_fields_are_retained() -> None:
+    raw = _memory_lifecycle_payload("invalidate")
+    raw["future_review_policy"] = {"minimum_approvals": 2}
+
+    payload = MemoryLifecycleChangedPayload.from_dict(raw)
+
+    assert payload.to_dict()["future_review_policy"] == {"minimum_approvals": 2}
+
+
+def test_memory_lifecycle_basis_can_repeat_one_atomic_prior_event() -> None:
+    raw = _memory_lifecycle_payload("confirm")
+    raw["basis_event_ids"] = ["event_merge", "event_merge", "event_merge"]
+
+    payload = MemoryLifecycleChangedPayload.from_dict(raw)
+
+    assert payload.basis_event_ids == (
+        "event_merge",
+        "event_merge",
+        "event_merge",
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "match"),
+    [
+        ("unknown_action", "unsupported memory lifecycle action"),
+        ("supersede_missing_replacement", "supersede requires"),
+        ("invalidate_with_replacement", "invalidate does not accept"),
+        ("merge_with_one_source", "propose_merge requires"),
+        ("confirm_without_user", "confirm requires"),
+        ("system_confirm", "user or maintainer"),
+        ("duplicate_sources", "must not contain duplicates"),
+    ],
+)
+def test_memory_lifecycle_rejects_invalid_actions_and_relationships(case: str, match: str) -> None:
+    raw = _memory_lifecycle_payload("invalidate")
+    if case == "unknown_action":
+        raw["action"] = "retire"
+    elif case == "supersede_missing_replacement":
+        raw["action"] = "supersede"
+    elif case == "invalidate_with_replacement":
+        raw["replacement_memory_id"] = "memory_2"
+    elif case == "merge_with_one_source":
+        raw["action"] = "propose_merge"
+        raw["proposal_memory_id"] = "memory_2"
+    elif case == "confirm_without_user":
+        raw["action"] = "confirm"
+        raw["actor_kind"] = "user"
+        raw["actor_id"] = "user_1"
+    elif case == "system_confirm":
+        raw = _memory_lifecycle_payload("confirm")
+        raw["actor_kind"] = "system"
+    else:
+        raw = _memory_lifecycle_payload("propose_merge")
+        raw["memory_ids"] = ["memory_1", "memory_1"]
+
+    with pytest.raises(EvoEventError, match=match):
+        MemoryLifecycleChangedPayload.from_dict(raw)
+
+
+def test_context_pack_event_and_reference_round_trip_preserve_unknown_fields() -> None:
+    payload = _context_pack_payload()
+    payload["future_packing_policy"] = {"preserve_headers": True}
+    raw = {
+        "event_id": "event_context_pack_1",
+        "event_type": "ContextPackRecorded",
+        "schema_version": "v1",
+        "occurred_at": "2026-08-01T00:00:00Z",
+        "sequence": 1,
+        "refs": {"run_id": "run_1", "context_pack_id": "context_pack_1"},
+        "payload": payload,
+    }
+
+    event = EvoEvent.from_dict(raw)
+
+    assert isinstance(event.payload, ContextPackRecordedPayload)
+    assert event.refs.context_pack_id == "context_pack_1"
+    assert event.payload.extensions == {"future_packing_policy": {"preserve_headers": True}}
+    assert EvoEvent.from_json(event.to_json()).to_dict() == raw
+
+
+@pytest.mark.parametrize(
+    ("case", "match"),
+    [
+        ("selected_lengths", "selected context-pack arrays"),
+        ("omitted_lengths", "omitted_memory_ids and omitted_reasons"),
+        ("over_budget", "must not exceed"),
+        ("negative_cost", "non-negative integer"),
+        ("invalid_boolean", "boolean"),
+        ("invalid_memory_id", "whitespace"),
+    ],
+)
+def test_context_pack_rejects_invalid_budget_and_parallel_arrays(case: str, match: str) -> None:
+    raw = _context_pack_payload()
+    if case == "selected_lengths":
+        raw["selected_end_offsets"] = [64]
+    elif case == "omitted_lengths":
+        raw["omitted_memory_ids"] = ["memory_3", "memory_4"]
+    elif case == "over_budget":
+        raw["used_tokens"] = 129
+    elif case == "negative_cost":
+        raw["selected_packed_token_costs"] = [64, -1]
+    elif case == "invalid_boolean":
+        raw["selected_truncated"] = [False, 0]
+    else:
+        raw["selected_memory_ids"] = ["memory_1", "bad memory id"]
+
+    with pytest.raises((EvoEventError, EvoIdentifierError), match=match):
+        ContextPackRecordedPayload.from_dict(raw)
+
+
+def test_memory_used_round_trip_binds_context_pack_and_verified_feedback() -> None:
+    raw = {
+        "reason": "Selected for the current plan node.",
+        "retrieval_rank": 0,
+        "helpfulness": "helpful",
+        "context_pack_id": "context_pack_1",
+        "usage_status": "used",
+        "packed_token_cost": 32,
+        "truncated": True,
+        "outcome_event_id": "event_outcome_1",
+        "verification_evidence_refs": ["evidence_verify_1"],
+        "feedback_status": "helpful",
+    }
+
+    payload = MemoryUsedPayload.from_dict(raw)
+
+    assert payload.to_dict() == raw
+    assert MemoryUsedPayload.from_dict(payload.to_dict()) == payload
+
+
+def test_legacy_memory_used_payload_defaults_to_unattributed_statuses() -> None:
+    payload = MemoryUsedPayload.from_dict(
+        {
+            "reason": "Legacy retrieval event.",
+            "retrieval_rank": 2,
+            "helpfulness": "helpful",
+        }
+    )
+
+    assert payload.usage_status == "legacy_unattributed"
+    assert payload.feedback_status == "legacy_unattributed"
+    assert payload.context_pack_id is None
+    assert payload.outcome_event_id is None
+    assert payload.verification_evidence_refs == ()
+
+
+@pytest.mark.parametrize(
+    ("case", "match"),
+    [
+        ("usage_enum", "usage_status"),
+        ("feedback_enum", "feedback_status"),
+        ("used_without_pack", "requires context_pack_id"),
+        ("not_used_without_pack", "requires context_pack_id"),
+        ("feedback_without_outcome", "requires outcome_event_id"),
+        ("feedback_without_evidence", "requires outcome_event_id"),
+        ("negative_packed_cost", "non-negative integer"),
+        ("invalid_truncated", "boolean"),
+    ],
+)
+def test_memory_used_rejects_invalid_enums_and_attribution(case: str, match: str) -> None:
+    raw: dict[str, object] = {
+        "reason": "Context attribution.",
+        "context_pack_id": "context_pack_1",
+        "usage_status": "used",
+        "truncated": False,
+        "feedback_status": "unknown",
+        "verification_evidence_refs": [],
+    }
+    if case == "usage_enum":
+        raw["usage_status"] = "maybe"
+    elif case == "feedback_enum":
+        raw["feedback_status"] = "excellent"
+    elif case == "used_without_pack":
+        raw.pop("context_pack_id")
+    elif case == "not_used_without_pack":
+        raw["usage_status"] = "not_used"
+        raw.pop("context_pack_id")
+    elif case == "feedback_without_outcome":
+        raw["feedback_status"] = "helpful"
+        raw["verification_evidence_refs"] = ["evidence_verify_1"]
+    elif case == "feedback_without_evidence":
+        raw["feedback_status"] = "harmful"
+        raw["outcome_event_id"] = "event_outcome_1"
+    elif case == "negative_packed_cost":
+        raw["packed_token_cost"] = -1
+    else:
+        raw["truncated"] = "false"
+
+    with pytest.raises(EvoEventError, match=match):
+        MemoryUsedPayload.from_dict(raw)
+
+
 def test_unknown_event_and_fields_are_retained() -> None:
     raw = {
         "event_id": "event_future",
@@ -396,8 +659,10 @@ def test_event_rejects_invalid_envelope_values(field: str, value: str) -> None:
 
 def test_identifier_generation_and_validation() -> None:
     identifier = new_evo_id("run")
+    context_pack_id = new_evo_id("context_pack")
 
     assert identifier.startswith("run_")
+    assert context_pack_id.startswith("context_pack_")
     assert require_evo_id(identifier, field="run_id", kind="run") == identifier
     with pytest.raises(EvoIdentifierError):
         require_evo_id("bad id", field="run_id")

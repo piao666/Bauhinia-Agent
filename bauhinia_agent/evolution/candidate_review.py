@@ -126,11 +126,7 @@ class CandidateReviewService:
 
         events = self._store.list_events()
         candidates = _candidates(events)
-        return [
-            item
-            for candidate_id, source in sorted(candidates.items())
-            if (item := _queue_item(source, _review_history(events, candidate_id))) is not None
-        ]
+        return [item for candidate_id, source in sorted(candidates.items()) if (item := _queue_item(source, _review_history(events, candidate_id))) is not None]
 
     def list_for_retrieval(self) -> list[CandidateQueueItem]:
         """Candidates never enter ordinary retrieval during P6, including accepted ones."""
@@ -189,18 +185,10 @@ def _candidates(events: list[EvoEvent]) -> dict[str, EvoEvent[ExperienceCandidat
 
 
 def _review_history(events: list[EvoEvent], candidate_id: str) -> list[EvoEvent[CandidateReviewRecordedPayload]]:
-    return [
-        event
-        for event in events
-        if event.event_type == "CandidateReviewRecorded"
-        and event.refs.candidate_id == candidate_id
-        and isinstance(event.payload, CandidateReviewRecordedPayload)
-    ]
+    return [event for event in events if event.event_type == "CandidateReviewRecorded" and event.refs.candidate_id == candidate_id and isinstance(event.payload, CandidateReviewRecordedPayload)]
 
 
-def _queue_item(
-    source: EvoEvent[ExperienceCandidateCreatedPayload], history: list[EvoEvent[CandidateReviewRecordedPayload]]
-) -> CandidateQueueItem | None:
+def _queue_item(source: EvoEvent[ExperienceCandidateCreatedPayload], history: list[EvoEvent[CandidateReviewRecordedPayload]]) -> CandidateQueueItem | None:
     latest = history[-1] if history else None
     if latest is not None and latest.payload.decision in {"accept", "reject"}:
         return None

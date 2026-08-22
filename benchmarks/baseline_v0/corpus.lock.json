@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "hash_algorithm": "sha256-normalized-lf",
+  "corpus_sha256": "1ba5e5dbb3f6ccea89bf64a089105ad6ca0460fc6741a0ff4db8a19c6b0f56fc",
+  "entries": [
+    {
+      "path": "manifest.json",
+      "sha256": "cd2a5322c9a2938dbd29ca21719d37280f6c37b3daa73f7dbbc33389d3d18940"
+    },
+    {
+      "path": "validate_manifest.py",
+      "sha256": "6a167f18e6b515f5db15d4b6f2db7e682d2ad131b2de109d568ae4b80e88bbe7"
+    },
+    {
+      "path": "verify_scenario.py",
+      "sha256": "37e3765ad7a3adaa15b0f02f32eae77c6dcd7ccb6942907708c609af710cbadc"
+    },
+    {
+      "path": "workspaces/cancel-child-work/scenario.json",
+      "sha256": "f2388d20ed715c2e8402738e072de41d0e392196869d37cded8718656ab3f883"
+    },
+    {
+      "path": "workspaces/context-conflicting-facts/scenario.json",
+      "sha256": "ee223ca12806165a619c062b9b13c492a19b89c112802598bbf3e453d27514dd"
+    },
+    {
+      "path": "workspaces/cross-file-currency-format/amounts.py",
+      "sha256": "733c114efc7e88a6f863d848c4b2f49eaa2b021d01d0d7c83fd59e66b690fcbe"
+    },
+    {
+      "path": "workspaces/cross-file-currency-format/app.py",
+      "sha256": "a79cf4f866da68067ef2cf68390eef36d51d77265f256a129048d70e5fb97593"
+    },
+    {
+      "path": "workspaces/cross-file-currency-format/scenario.json",
+      "sha256": "a829f1dfa37dc683f6d4d99df6d9394a9cbe0f70ee497394ea0f6f048d77fc3c"
+    },
+    {
+      "path": "workspaces/mcp-schema-path-error/scenario.json",
+      "sha256": "aa91c4919b5c96e00691d9858d22e753122801f8ae6fb8fba7c96be4e0e3cc24"
+    },
+    {
+      "path": "workspaces/new-function-slug/app.py",
+      "sha256": "80995e18fb2c6ff86c2909442873930887e95911d50681399a9baea2129c4faf"
+    },
+    {
+      "path": "workspaces/new-function-slug/scenario.json",
+      "sha256": "77946c98778143ed8e438477d6dcc8aca00f4eb2db053f7ddf20b527d60da995"
+    },
+    {
+      "path": "workspaces/permission-write-denied/scenario.json",
+      "sha256": "be9e25879a0cc0df5f7f592fc8e2892d1c44b20944434fa2652ce6271b8b1c8a"
+    },
+    {
+      "path": "workspaces/provider-timeout/scenario.json",
+      "sha256": "0c07dcf5660dc7f90c1e7fe0ca1e699eb3c4ca39ae4c398405d5295c045bb033"
+    },
+    {
+      "path": "workspaces/recovery-after-tool-error/scenario.json",
+      "sha256": "3527aff53fdac40c5ad363f42d0c0a41a544edf3225cb40614541e5ccfd6713a"
+    },
+    {
+      "path": "workspaces/redact-token-evidence/scenario.json",
+      "sha256": "22ce13b17fac352ca2cc4c86f2b408358f426d470ec36fc8874d2e5c5646e7fb"
+    },
+    {
+      "path": "workspaces/resume-session-state/scenario.json",
+      "sha256": "1c9fbfcbb3ed8955d27398f2c8f284cd77b632f6ed72d40cea6864826c74e41a"
+    },
+    {
+      "path": "workspaces/small-defect-zero-boundary/app.py",
+      "sha256": "cc835693f0b6d8721ece03886180ebac3ac00fc8769aac04476fe18c0c7c15df"
+    },
+    {
+      "path": "workspaces/small-defect-zero-boundary/scenario.json",
+      "sha256": "18d37f90417870acb0d35316681c0d47c4f4238b387299f2cc0db3b6b4c8e66e"
+    },
+    {
+      "path": "workspaces/tool-invalid-arguments/scenario.json",
+      "sha256": "24e356b297faeac4259f120bd8f4bd2be6ebef8e5fd4dd8d13fbb62b6dee7262"
+    }
+  ]
+}

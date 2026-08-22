@@ -277,6 +277,12 @@ class ToolExecutor:
                 f"工具 {tool_call.name} 不支持后台执行；请去掉 run_in_background 后重试。",
                 background_rejected="not_allowed",
             )
+        if tool_call.name == "delegate" and isinstance(tool_call.arguments, dict) and "contract" in tool_call.arguments:
+            return make_error_result(
+                tool_call.name,
+                "Structured delegate contracts are already scheduled by the collaboration runtime; remove run_in_background.",
+                background_rejected="structured_delegate_owns_scheduling",
+            )
         if tool_call.name == "delegate" and not self._delegate_call_allows_background(tool_call):
             return make_error_result(
                 tool_call.name,

@@ -6,7 +6,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import anyio
 
@@ -19,6 +19,7 @@ from bauhinia_agent.agent.task_boundary_classifier import TaskBoundaryClassifier
 from bauhinia_agent.agent.task_plan_policy import TaskPlanPolicy, render_current_task_plan_snapshot
 from bauhinia_agent.agent.tool_execution import ToolExecutionEvent, ToolExecutor
 from bauhinia_agent.agent.evo_observer import AgentEvoObserver
+from bauhinia_agent.agent.collaboration import CollaborationRuntimeAdapter
 from bauhinia_agent.agent.tool_settlement import ToolCallSettlement
 from bauhinia_agent.agent.background import (
     DEFAULT_BACKGROUND_TOOL_NAMES,
@@ -47,9 +48,16 @@ from bauhinia_agent.tools.permission_results import (
 )
 from bauhinia_agent.tools.background import create_background_cancel_tool, create_background_status_tool
 from bauhinia_agent.agent.subagent import SubagentRunner
+from bauhinia_agent.evolution.collaboration import CollaborationService
+from bauhinia_agent.evolution.identifiers import new_evo_id, require_evo_id
+from bauhinia_agent.evolution.store import EvoEventStore
+from bauhinia_agent.planning.evo import TaskContract
 from bauhinia_agent.tools.delegate import create_delegate_tool
 from bauhinia_agent.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from bauhinia_agent.tools.types import Tool, ToolResult, make_error_result
+
+if TYPE_CHECKING:
+    from bauhinia_agent.self_model.runtime import SelfModelPlanningSnapshot, SelfModelRuntime
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +103,7 @@ class AgentLoop:
         background_tool_names: frozenset[str] | None = None,
         enable_delegate_tool: bool = True,
         evolution_observer: AgentEvoObserver | None = None,
+        self_model_runtime: SelfModelRuntime | None = None,
     ) -> None:
         self.session = session
         self.tool_settlement = ToolCallSettlement(session)
@@ -118,6 +127,10 @@ class AgentLoop:
         self.background_tool_names = background_tool_names if background_tool_names is not None else DEFAULT_BACKGROUND_TOOL_NAMES
         self.enable_delegate_tool = enable_delegate_tool
         self.evolution_observer = evolution_observer
+        self.self_model_runtime = self_model_runtime
+        self._self_model_snapshot: SelfModelPlanningSnapshot | None = None
+        self._subagent_runner: SubagentRunner | None = None
+        self._collaboration_adapters: dict[tuple[str, str], CollaborationRuntimeAdapter] = {}
         self._task_plan_reconciliation_attempted = False
         self._tool_rounds_completed = 0
         self.task_boundary_classifier = TaskBoundaryClassifier(
@@ -223,6 +236,8 @@ class AgentLoop:
         except AgentCancelledError:
             return self._complete_turn(self._interrupted_response())
 
+        self._prepare_self_model_turn(content)
+
         return self._run_tool_loop_interactive(
             self._complete_once_with_recovery,
         )
@@ -303,6 +318,8 @@ class AgentLoop:
             return self._complete_turn(self._limit_response(exc.reason)).response
         except AgentCancelledError:
             return self._complete_turn(self._interrupted_response()).response
+
+        self._prepare_self_model_turn(content)
 
         result = await self._run_tool_loop_interactive_async(
             self._stream_once_with_recovery,
@@ -1033,6 +1050,13 @@ class AgentLoop:
                 *system_prefix,
                 ChatMessage(role="system", content=runtime_instruction),
             ]
+        if self.self_model_runtime is not None:
+            advisory = self.self_model_runtime.advisory_for(self._self_model_snapshot)
+            if advisory:
+                system_prefix = [
+                    *system_prefix,
+                    ChatMessage(role="system", content=advisory),
+                ]
         if resolved_view.task_plan is not None:
             system_prefix = [
                 *system_prefix,
@@ -1106,12 +1130,104 @@ class AgentLoop:
             sandbox_access=self.session.sandbox_access,
             request_options=self.request_options,
         )
+        self._subagent_runner = runner
         self.session.tool_registry.register(
             create_delegate_tool(
                 runner,
                 parent_session_id=self.session.session_id,
                 parent_task_hash=self.session.runtime_state.active_task_hash,
+                collaboration_dispatcher=self._dispatch_collaboration_contract,
             )
+        )
+
+    def _dispatch_collaboration_contract(
+        self,
+        contract: TaskContract,
+        collaboration_id: str | None,
+        assignment_id: str | None,
+    ) -> ToolResult:
+        """Route one formal hand-off through the P10 runtime and fact service."""
+
+        run_id = None if self.evolution_observer is None else self.evolution_observer.active_run_id
+        if run_id is None:
+            return make_error_result(
+                "delegate",
+                "Structured collaboration requires an active Evo Run.",
+                collaboration_unavailable=True,
+            )
+        if self.background_manager is None or self._subagent_runner is None:
+            return make_error_result(
+                "delegate",
+                "Structured collaboration requires the shared background runtime.",
+                collaboration_unavailable=True,
+            )
+        resolved_collaboration_id = collaboration_id if collaboration_id is not None else f"collaboration_{new_evo_id('event')}"
+        resolved_assignment_id = assignment_id if assignment_id is not None else f"assignment_{new_evo_id('event')}"
+        try:
+            require_evo_id(
+                resolved_collaboration_id,
+                field="collaboration_id",
+            )
+            require_evo_id(resolved_assignment_id, field="assignment_id")
+        except ValueError as error:
+            return make_error_result(
+                "delegate",
+                f"Invalid collaboration identifier: {error}",
+            )
+
+        key = (run_id, resolved_collaboration_id)
+        adapter = self._collaboration_adapters.get(key)
+        if adapter is None:
+            service = CollaborationService(
+                store=EvoEventStore(self.session.store.root),
+                parent_run_id=run_id,
+                session_id=self.session.session_id,
+            )
+            adapter = CollaborationRuntimeAdapter(
+                runner=self._subagent_runner,
+                background_manager=self.background_manager,
+                service=service,
+                parent_session_id=self.session.session_id,
+                parent_run_id=run_id,
+            )
+            self._collaboration_adapters[key] = adapter
+        try:
+            batch = adapter.dispatch_many(
+                collaboration_id=resolved_collaboration_id,
+                assignments={resolved_assignment_id: contract},
+            )
+        except ValueError as error:
+            return make_error_result(
+                "delegate",
+                f"Collaboration contract rejected: {error}",
+                collaboration_id=resolved_collaboration_id,
+                assignment_id=resolved_assignment_id,
+            )
+
+        if resolved_assignment_id not in batch.job_ids:
+            outcome = adapter.outcome(resolved_assignment_id)
+            diagnostic = None if outcome is None else outcome.recorded.diagnostic or outcome.recorded.result.summary
+            return make_error_result(
+                "delegate",
+                diagnostic or "Collaboration assignment was not admitted.",
+                collaboration_id=resolved_collaboration_id,
+                assignment_id=resolved_assignment_id,
+                blocked=True,
+            )
+        return ToolResult(
+            name="delegate",
+            ok=True,
+            content=(
+                f"Collaboration assignment {resolved_assignment_id} was queued as "
+                f"{batch.job_ids[resolved_assignment_id]}; its evidence-governed result "
+                "will arrive through the shared background notification channel."
+            ),
+            data={
+                "collaboration_id": resolved_collaboration_id,
+                "assignment_id": resolved_assignment_id,
+                "job_id": batch.job_ids[resolved_assignment_id],
+                "status": "running",
+            },
         )
 
     def _begin_turn(self, *, new_user_turn: bool = True) -> None:
@@ -1127,8 +1243,30 @@ class AgentLoop:
             self.evolution_observer.begin_turn()
 
     def _complete_evolution_turn(self, response: ChatResponse) -> None:
+        outcome_event_id: str | None = None
         if self.evolution_observer is not None:
-            self.evolution_observer.complete_turn(response)
+            result = self.evolution_observer.complete_turn(response)
+            outcome_event_id = None if result is None else result.outcome_event_id
+        if self.self_model_runtime is not None:
+            self.self_model_runtime.record_completed_outcome(
+                self._self_model_snapshot,
+                outcome_event_id=outcome_event_id,
+            )
+
+    def _prepare_self_model_turn(self, content: str) -> None:
+        """Build one pre-execution advisory; provider retries reuse this snapshot."""
+
+        if self.self_model_runtime is None:
+            self._self_model_snapshot = None
+            return
+        active_run_id = None if self.evolution_observer is None else self.evolution_observer.active_run_id
+        self._self_model_snapshot = self.self_model_runtime.prepare_task(
+            content,
+            provider_name=self.provider.name,
+            provider_model=self.provider.model,
+            request_options=self.request_options.as_chat_request_kwargs(),
+            run_id=active_run_id,
+        )
 
     def _validate_mcp_tool_call(self, tool_call: ToolCall) -> ToolResult | None:
         if tool_call.name not in self._mcp_tool_names:

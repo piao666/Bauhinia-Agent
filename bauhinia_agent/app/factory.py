@@ -16,6 +16,7 @@ from bauhinia_agent.app.permission_commands import PermissionCommandHandler
 from bauhinia_agent.app.router import CompositeCommandHandler
 from bauhinia_agent.app.runtime import AgentChatRunner, CurrentSessionState
 from bauhinia_agent.app.session_commands import SessionCommandHandler
+from bauhinia_agent.app.self_model_commands import SelfModelCommandHandler
 from bauhinia_agent.app.skill_commands import SkillCommandHandler
 from bauhinia_agent.app.tui import BauhiniaAgentApp, BauhiniaAgentTuiConfig
 from bauhinia_agent.config.models import ModelCatalog, ModelProfile
@@ -44,6 +45,7 @@ from bauhinia_agent.session.fork import ForkSessionService
 from bauhinia_agent.session.new import NewSessionService
 from bauhinia_agent.session.resume import ResumeService
 from bauhinia_agent.session.share import SessionShareService
+from bauhinia_agent.self_model.runtime import create_self_model_runtime
 from bauhinia_agent.skills.discovery import discover_all_skills
 from bauhinia_agent.tools.builtin import create_builtin_registry
 from bauhinia_agent.agent.background import BackgroundJobManager
@@ -215,6 +217,10 @@ def create_bauhinia_agent_app(
     permission_handler = PermissionCommandHandler(session=current)
     skill_catalog_provider = lambda: discover_all_skills(project_path)
     skill_handler = SkillCommandHandler(catalog_provider=skill_catalog_provider)
+    self_model_runtime = create_self_model_runtime(
+        project_root=project_path,
+        data_root=resolved_data_root,
+    )
     chat_runner = AgentChatRunner(
         current_session=current,
         provider=resolved_provider,
@@ -227,6 +233,7 @@ def create_bauhinia_agent_app(
         context_window=selected_profile.context_window if selected_profile is not None else None,
         background_manager=background_manager,
         evolution_enabled=True,
+        self_model_runtime=self_model_runtime,
     )
     context_handler = ContextCommandHandler(
         session=current,
@@ -248,6 +255,7 @@ def create_bauhinia_agent_app(
             session_handler,
             context_handler,
             permission_handler,
+            SelfModelCommandHandler(self_model_runtime),
             skill_handler,
         ]
     )

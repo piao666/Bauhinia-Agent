@@ -67,6 +67,19 @@ def test_verified_experience_becomes_versioned_shadow_only_skill_candidate(tmp_p
     assert second is not None
 
     shadow = ArtifactShadowService(store)
+    shadow_run_id = new_evo_id("run")
+    shadow_evidence = EvidenceAdapter(store).record(
+        EvidenceInput(
+            run_id=shadow_run_id,
+            evidence_type="test",
+            source="pytest",
+            summary="Shadow verification quality regressed",
+            verified=True,
+            command="pytest -q",
+            exit_code=1,
+        )
+    )
+    assert shadow_evidence.evidence is not None
     trial = shadow.record_trial(
         ShadowTrialSpec(
             artifact_id=second.artifact_id,
@@ -76,7 +89,7 @@ def test_verified_experience_becomes_versioned_shadow_only_skill_candidate(tmp_p
             environment_hash="c" * 64,
             baseline_summary="Baseline verification passed.",
             candidate_summary="Candidate omitted one required check.",
-            evidence_refs=(new_evo_id("evidence"),),
+            evidence_refs=(shadow_evidence.evidence.evidence_id,),
             passed=False,
             failure_reason="Shadow verification quality regressed.",
         )

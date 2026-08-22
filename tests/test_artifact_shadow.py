@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from bauhinia_agent.evolution.candidate_artifacts import (
     CandidateArtifactRegistry,
 )
 from bauhinia_agent.evolution.candidate_review import CandidateReview, CandidateReviewService
+from bauhinia_agent.evolution.evidence import EvidenceAdapter, EvidenceInput
 from bauhinia_agent.evolution.events import EvoEvent, EvoReferences, ExperienceCandidateCreatedPayload
 from bauhinia_agent.evolution.identifiers import new_evo_id
 from bauhinia_agent.evolution.store import EvoEventStore, EvoStoreError
@@ -45,6 +47,7 @@ def test_shadow_trial_records_redacted_observation_without_real_effects(tmp_path
 
     result = ArtifactShadowService(store).record_trial(
         _trial(
+            store,
             artifact.artifact_id,
             passed=True,
             baseline_summary="Baseline result.",
@@ -68,6 +71,7 @@ def test_failed_shadow_can_be_disabled_and_resumed_without_losing_trial_evidence
     service = ArtifactShadowService(store)
     failed = service.record_trial(
         _trial(
+            store,
             artifact.artifact_id,
             passed=False,
             baseline_summary="Baseline passed.",
@@ -91,7 +95,7 @@ def test_failed_shadow_can_be_disabled_and_resumed_without_losing_trial_evidence
     assert service.list_suggestions() == ()
     assert service.list_trials(artifact.artifact_id) == (failed.trial,)
     with pytest.raises(ArtifactShadowError, match="not enabled"):
-        service.record_trial(_trial(artifact.artifact_id, passed=True))
+        service.record_trial(_trial(store, artifact.artifact_id, passed=True))
 
     resumed = service.control(
         ArtifactControlRequest(
@@ -99,7 +103,7 @@ def test_failed_shadow_can_be_disabled_and_resumed_without_losing_trial_evidence
             action="resume_shadow",
             reviewer="curator",
             reason="Resume only for another controlled comparison.",
-            evidence_refs=(new_evo_id("evidence"),),
+            evidence_refs=failed.trial.payload.evidence_refs,
         )
     )
     assert resumed.persisted is True
@@ -111,7 +115,7 @@ def test_shadow_rollback_selects_prior_version_and_preserves_history(tmp_path: P
     first, second = _artifact_pair(store)
     other, _ = _artifact_pair(store, name="other-shadow-policy")
     service = ArtifactShadowService(store)
-    trial = service.record_trial(_trial(second.artifact_id, passed=False, failure_reason="Regression."))
+    trial = service.record_trial(_trial(store, second.artifact_id, passed=False, failure_reason="Regression."))
     assert trial.trial is not None
 
     rollback = service.control(
@@ -136,7 +140,7 @@ def test_shadow_rollback_selects_prior_version_and_preserves_history(tmp_path: P
                 action="rollback_shadow",
                 reviewer="curator",
                 reason="Invalid cross-lineage rollback.",
-                evidence_refs=(new_evo_id("evidence"),),
+                evidence_refs=trial.trial.payload.evidence_refs,
                 target_artifact_id=other.artifact_id,
             )
         )
@@ -147,15 +151,45 @@ def test_shadow_validation_and_store_failure_are_safe(tmp_path: Path) -> None:
     _, artifact = _artifact_pair(store)
     service = ArtifactShadowService(store)
     with pytest.raises(ArtifactShadowError, match="failure_reason"):
-        service.record_trial(_trial(artifact.artifact_id, passed=False))
+        service.record_trial(_trial(store, artifact.artifact_id, passed=False))
     with pytest.raises(ArtifactShadowError, match="hexadecimal digest"):
-        service.record_trial(_trial(artifact.artifact_id, passed=True, task_input_hash="raw task input"))
+        service.record_trial(
+            _trial(
+                store,
+                artifact.artifact_id,
+                passed=True,
+                task_input_hash="raw task input",
+            )
+        )
 
-    result = ArtifactShadowService(_FailingStore(store.list_events())).record_trial(_trial(artifact.artifact_id, passed=True))
+    valid_trial = _trial(store, artifact.artifact_id, passed=True)
+    result = ArtifactShadowService(_FailingStore(store.list_events())).record_trial(valid_trial)
     assert result.persisted is False
     assert result.trial is None
     assert result.diagnostic is not None
     assert result.diagnostic.code == "shadow_trial_recording_failed"
+
+
+def test_shadow_and_control_fail_closed_on_noncanonical_evidence(tmp_path: Path) -> None:
+    store = EvoEventStore(tmp_path / ".bauhinia-agent")
+    _, artifact = _artifact_pair(store)
+    service = ArtifactShadowService(store)
+    canonical = _trial(store, artifact.artifact_id, passed=True)
+
+    with pytest.raises(ArtifactShadowError, match="does not exist"):
+        service.record_trial(replace(canonical, evidence_refs=(new_evo_id("evidence"),)))
+    with pytest.raises(ArtifactShadowError, match="conflicts"):
+        service.record_trial(replace(canonical, passed=False, failure_reason="Forged failure."))
+    with pytest.raises(ArtifactShadowError, match="does not exist"):
+        service.control(
+            ArtifactControlRequest(
+                artifact_id=artifact.artifact_id,
+                action="disable_shadow",
+                reviewer="curator",
+                reason="Forged control evidence.",
+                evidence_refs=(new_evo_id("evidence"),),
+            )
+        )
 
 
 def _artifact_pair(
@@ -205,6 +239,7 @@ def _draft(
 
 
 def _trial(
+    store: EvoEventStore,
     artifact_id: str,
     *,
     passed: bool,
@@ -213,6 +248,19 @@ def _trial(
     failure_reason: str | None = None,
     task_input_hash: str = "a" * 64,
 ) -> ShadowTrialSpec:
+    run_id = new_evo_id("run")
+    evidence = EvidenceAdapter(store).record(
+        EvidenceInput(
+            run_id=run_id,
+            evidence_type="test",
+            source="pytest",
+            summary="Shadow verification passed" if passed else "Shadow verification failed",
+            verified=True,
+            command="pytest -q",
+            exit_code=0 if passed else 1,
+        )
+    )
+    assert evidence.evidence is not None
     return ShadowTrialSpec(
         artifact_id=artifact_id,
         mode="shadow",
@@ -221,7 +269,7 @@ def _trial(
         environment_hash="c" * 64,
         baseline_summary=baseline_summary,
         candidate_summary=candidate_summary,
-        evidence_refs=(new_evo_id("evidence"),),
+        evidence_refs=(evidence.evidence.evidence_id,),
         passed=passed,
         failure_reason=failure_reason,
     )

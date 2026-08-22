@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from collections.abc import Iterable, Sequence
 from typing import Mapping, Protocol
 
 from bauhinia_agent.evolution.events import EvidenceRecordedPayload, EvoEvent, EvoReferences
@@ -22,7 +23,12 @@ class EvidenceError(ValueError):
     """Raised when a caller supplies an invalid evidence observation."""
 
 
-_EVIDENCE_TYPES = frozenset({"test", "lint", "type_check", "build", "diff", "tool", "permission", "user_confirmation", "manual"})
+class EvidenceIntegrityError(EvidenceError):
+    """Raised when references do not resolve to trustworthy canonical evidence."""
+
+
+DETERMINISTIC_EVIDENCE_TYPES = frozenset({"test", "lint", "type_check", "build", "diff"})
+EVIDENCE_TYPES = DETERMINISTIC_EVIDENCE_TYPES | frozenset({"tool", "permission", "user_confirmation", "manual"})
 _NAMED_SECRET_RE = re.compile(r"(?i)\b(api[_-]?key|token|secret|password|cookie)\b\s*([=:])\s*([^\s,;'\"]+)")
 _BEARER_RE = re.compile(r"(?i)\b(authorization)\s*:\s*bearer\s+[^\s,;'\"]+")
 _OPENAI_KEY_RE = re.compile(r"\bsk-[A-Za-z0-9_-]{6,}\b")
@@ -87,6 +93,13 @@ class EvidenceAdapter:
     def record(self, observation: EvidenceInput) -> EvidenceRecordResult:
         """Persist an evidence observation without allowing recorder failure to escape."""
 
+        if observation.evidence_type == "user_confirmation":
+            raise EvidenceError("user_confirmation must be recorded through the user-input boundary")
+        return self._record(observation)
+
+    def _record(self, observation: EvidenceInput) -> EvidenceRecordResult:
+        """Persist an already-authorized normalized observation."""
+
         event = self._event_from_input(observation)
         try:
             append_result = self._store.append(event)
@@ -105,6 +118,40 @@ class EvidenceAdapter:
         if append_result.diagnostic is not None:
             diagnostic = EvidenceDiagnostic(code=append_result.diagnostic.code, message=append_result.diagnostic.message)
         return EvidenceRecordResult(persisted=True, evidence=evidence, diagnostic=diagnostic)
+
+    def record_user_confirmation(
+        self,
+        *,
+        run_id: str,
+        user_id: str,
+        session_id: str,
+        confirmation_id: str,
+        summary: str,
+    ) -> EvidenceRecordResult:
+        """Record a confirmation emitted by the authenticated user-input boundary.
+
+        Generic evidence callers cannot self-declare this evidence type.  The
+        application boundary must supply stable user, session, and correlation
+        identifiers so downstream Memory confirmation can match the actor.
+        """
+
+        for field, value in (
+            ("user_id", user_id),
+            ("session_id", session_id),
+            ("confirmation_id", confirmation_id),
+        ):
+            _require_text(value, field=field)
+        return self._record(
+            EvidenceInput(
+                run_id=run_id,
+                evidence_type="user_confirmation",
+                source="user_input_boundary",
+                summary=summary,
+                locator=confirmation_id,
+                verified=True,
+                input_summary=_json_summary({"session_id": session_id, "user_id": user_id}),
+            )
+        )
 
     def record_tool(
         self,
@@ -178,7 +225,7 @@ class EvidenceAdapter:
 
     def _event_from_input(self, observation: EvidenceInput) -> EvoEvent[EvidenceRecordedPayload]:
         require_evo_id(observation.run_id, field="run_id", kind="run")
-        if observation.evidence_type not in _EVIDENCE_TYPES:
+        if observation.evidence_type not in EVIDENCE_TYPES:
             raise EvidenceError(f"unsupported evidence_type: {observation.evidence_type}")
         if isinstance(observation.exit_code, bool) or (observation.exit_code is not None and not isinstance(observation.exit_code, int)):
             raise EvidenceError("exit_code must be an integer or null")
@@ -222,6 +269,83 @@ def _record_from_event(event: EvoEvent[EvidenceRecordedPayload]) -> EvidenceReco
         occurred_at=event.occurred_at,
         payload=event.payload,
     )
+
+
+def user_confirmation_identity(record: EvidenceRecord) -> tuple[str, str] | None:
+    """Return the authenticated ``(user_id, session_id)`` confirmation scope."""
+
+    payload = record.payload
+    if record.evidence_type != "user_confirmation" or not payload.verified or payload.source != "user_input_boundary" or not payload.locator or not payload.input_summary:
+        return None
+    try:
+        raw = json.loads(payload.input_summary)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    user_id = raw.get("user_id")
+    session_id = raw.get("session_id")
+    if not isinstance(user_id, str) or not user_id.strip() or not isinstance(session_id, str) or not session_id.strip():
+        return None
+    return user_id, session_id
+
+
+def resolve_evidence_records(
+    events: Iterable[EvoEvent],
+    evidence_refs: Sequence[str],
+    *,
+    run_id: str | None = None,
+    require_verified: bool = False,
+    deterministic_only: bool = False,
+    require_exit_code: bool = False,
+    before_sequence: int | None = None,
+) -> tuple[EvidenceRecord, ...]:
+    """Resolve references in caller order and fail closed on ambiguous evidence.
+
+    This is the shared integrity boundary for projections such as Evaluation and
+    Self Model.  It deliberately resolves the append-only fact events instead
+    of trusting a caller-supplied evidence identifier or summary.
+    """
+
+    refs = tuple(evidence_refs)
+    if not refs:
+        raise EvidenceIntegrityError("at least one Evidence reference is required")
+    if len(set(refs)) != len(refs):
+        raise EvidenceIntegrityError("Evidence references must be unique")
+    for ref in refs:
+        require_evo_id(ref, field="evidence_refs[]", kind="evidence")
+    if run_id is not None:
+        require_evo_id(run_id, field="run_id", kind="run")
+    if before_sequence is not None and (isinstance(before_sequence, bool) or not isinstance(before_sequence, int) or before_sequence < 1):
+        raise EvidenceIntegrityError("before_sequence must be a positive integer")
+
+    matches: dict[str, list[EvoEvent[EvidenceRecordedPayload]]] = {ref: [] for ref in refs}
+    for event in events:
+        evidence_id = event.refs.evidence_id
+        if event.event_type == "EvidenceRecorded" and isinstance(event.payload, EvidenceRecordedPayload) and evidence_id in matches:
+            matches[evidence_id].append(event)
+
+    records: list[EvidenceRecord] = []
+    for ref in refs:
+        candidates = matches[ref]
+        if not candidates:
+            raise EvidenceIntegrityError(f"Evidence reference does not exist: {ref}")
+        if len(candidates) != 1:
+            raise EvidenceIntegrityError(f"Evidence reference is ambiguous: {ref}")
+        event = candidates[0]
+        payload = event.payload
+        if before_sequence is not None and (event.sequence is None or event.sequence >= before_sequence):
+            raise EvidenceIntegrityError(f"Evidence reference must precede the consuming fact: {ref}")
+        if run_id is not None and event.refs.run_id != run_id:
+            raise EvidenceIntegrityError(f"Evidence reference belongs to a different Run: {ref}")
+        if require_verified and not payload.verified:
+            raise EvidenceIntegrityError(f"Evidence reference is not verified: {ref}")
+        if deterministic_only and payload.evidence_type not in DETERMINISTIC_EVIDENCE_TYPES:
+            raise EvidenceIntegrityError(f"Evidence reference is not deterministic: {ref}")
+        if require_exit_code and payload.exit_code is None:
+            raise EvidenceIntegrityError(f"Evidence reference has no exit code: {ref}")
+        records.append(_record_from_event(event))
+    return tuple(records)
 
 
 def _json_summary(arguments: Mapping[str, object]) -> str:

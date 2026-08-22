@@ -12,6 +12,8 @@ IdentifierKind = Literal[
     "plan",
     "node",
     "memory",
+    "memory_change",
+    "context_pack",
     "candidate",
     "artifact",
     "evidence",

@@ -18,6 +18,7 @@ from bauhinia_agent.evaluation import (
     hash_text,
     private_reference_hash,
 )
+from bauhinia_agent.evolution.evidence import EvidenceAdapter, EvidenceInput
 from bauhinia_agent.evolution.events import CandidateArtifactCreatedPayload, EvoEvent, EvoReferences
 from bauhinia_agent.evolution.identifiers import new_evo_id
 from bauhinia_agent.evolution.store import EvoEventStore
@@ -67,7 +68,7 @@ def test_clean_held_out_trial_exposes_only_public_case_input(tmp_path: Path) -> 
     store = EvoEventStore(tmp_path / ".bauhinia-agent")
     manifest = _manifest()
     EvalCorpusRegistry(store).register(manifest)
-    evaluator = _InspectingEvaluator()
+    evaluator = _InspectingEvaluator(store)
 
     result = HeldOutEvalHarness(store).run(manifest, manifest.cases[0].case.case_id, _baseline(), evaluator, seed=7)
 
@@ -91,7 +92,7 @@ def test_candidate_source_overlap_invalidates_held_out_trial(tmp_path: Path, ove
         source_run_ids=(source_run,) if overlap == "run" else (new_evo_id("run"),),
         evidence_refs=(source_evidence,) if overlap == "evidence" else (new_evo_id("evidence"),),
     )
-    evaluator = _InspectingEvaluator()
+    evaluator = _InspectingEvaluator(store)
 
     result = HeldOutEvalHarness(store).run(manifest, manifest.cases[0].case.case_id, _candidate(artifact_id), evaluator, seed=7)
 
@@ -113,7 +114,7 @@ def test_accessing_private_reference_resource_invalidates_trial(tmp_path: Path) 
         manifest,
         manifest.cases[0].case.case_id,
         _baseline(),
-        _InspectingEvaluator(accessed_resource_hashes=(reference_hash,)),
+        _InspectingEvaluator(store, accessed_resource_hashes=(reference_hash,)),
         seed=7,
     )
 
@@ -217,7 +218,8 @@ def _artifact(
 class _InspectingEvaluator:
     version = "deterministic-v1"
 
-    def __init__(self, *, accessed_resource_hashes: tuple[str, ...] = ()) -> None:
+    def __init__(self, store: EvoEventStore, *, accessed_resource_hashes: tuple[str, ...] = ()) -> None:
+        self._evidence = EvidenceAdapter(store)
         self.accessed_resource_hashes = accessed_resource_hashes
         self.request: EvalRunInput | None = None
         self.saw_public_input = False
@@ -225,8 +227,23 @@ class _InspectingEvaluator:
     def evaluate(self, request: EvalRunInput) -> EvalObservation:
         self.request = request
         self.saw_public_input = bool(request.public_input)
+        recorded = self._evidence.record(
+            EvidenceInput(
+                run_id=request.run_id,
+                evidence_type="test",
+                source="pytest",
+                summary="held-out verification passed",
+                verified=True,
+                command="pytest -q",
+                exit_code=0,
+            )
+        )
+        assert recorded.persisted and recorded.evidence is not None
         return EvalObservation(
             task_outcome="task_success",
             verification_quality=1.0,
+            evidence_refs=(recorded.evidence.evidence_id,),
+            verification_commands=("pytest -q",),
+            evidence_success=True,
             accessed_resource_hashes=self.accessed_resource_hashes,
         )

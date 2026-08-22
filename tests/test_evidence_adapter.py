@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bauhinia_agent.evolution.evidence import EvidenceAdapter, EvidenceInput
+import pytest
+
+from bauhinia_agent.evolution.evidence import (
+    EvidenceAdapter,
+    EvidenceInput,
+    EvidenceIntegrityError,
+    resolve_evidence_records,
+)
 from bauhinia_agent.evolution.events import EvidenceRecordedPayload
 from bauhinia_agent.evolution.identifiers import new_evo_id
 from bauhinia_agent.evolution.store import EvoEventStore, EvoStoreError
@@ -90,6 +97,47 @@ def test_records_tool_and_permission_evidence_for_the_same_run(tmp_path: Path) -
     assert tool.evidence.payload.input_summary == '{"command":"echo $TOKEN=[REDACTED]"}'
     assert permission.evidence is not None
     assert permission.evidence.payload.input_summary == "curl https://example.invalid -H 'Authorization: Bearer [REDACTED]'"
+
+
+def test_resolver_rejects_evidence_appended_after_the_consuming_fact(
+    tmp_path: Path,
+) -> None:
+    store = EvoEventStore(tmp_path / ".bauhinia-agent")
+    adapter = EvidenceAdapter(store)
+    run_id = new_evo_id("run")
+    earlier = adapter.record(
+        EvidenceInput(
+            run_id=run_id,
+            evidence_type="test",
+            source="pytest",
+            summary="earlier evidence",
+            verified=True,
+            exit_code=0,
+        )
+    )
+    later = adapter.record(
+        EvidenceInput(
+            run_id=run_id,
+            evidence_type="test",
+            source="pytest",
+            summary="later evidence",
+            verified=True,
+            exit_code=0,
+        )
+    )
+    assert earlier.evidence is not None and later.evidence is not None
+
+    assert resolve_evidence_records(
+        store.list_events(),
+        (earlier.evidence.evidence_id,),
+        before_sequence=2,
+    ) == (earlier.evidence,)
+    with pytest.raises(EvidenceIntegrityError, match="precede"):
+        resolve_evidence_records(
+            store.list_events(),
+            (later.evidence.evidence_id,),
+            before_sequence=2,
+        )
 
 
 def test_recorder_failure_returns_a_discoverable_diagnostic_without_raising() -> None:

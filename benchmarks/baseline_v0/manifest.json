@@ -1,0 +1,122 @@
+{
+  "schema_version": 2,
+  "corpus_id": "bauhinia-evo-offline-baseline",
+  "corpus_version": "v0",
+  "verifier_version": "1.0.0",
+  "license": "MIT",
+  "source": "repository-authored synthetic fixtures",
+  "immutable": true,
+  "purpose": "P0 synthetic offline corpus health baseline; not a model or promotion evaluation.",
+  "case_count": 12,
+  "expected_initial_failures": 4,
+  "cases": [
+    {
+      "id": "new-function-slug",
+      "category": "new_function",
+      "task_input": "在 app.py 中新增 slugify(text)，将 Hello, World! 转为 hello-world。",
+      "workspace_baseline": "workspaces/new-function-slug",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/new-function-slug/scenario.json",
+      "expected_evidence_type": "deterministic_python_test",
+      "baseline_expected_outcome": "fail"
+    },
+    {
+      "id": "small-defect-zero-boundary",
+      "category": "small_defect",
+      "task_input": "修复 is_valid_count，使零有效、负数无效。",
+      "workspace_baseline": "workspaces/small-defect-zero-boundary",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/small-defect-zero-boundary/scenario.json",
+      "expected_evidence_type": "deterministic_python_test",
+      "baseline_expected_outcome": "fail"
+    },
+    {
+      "id": "cross-file-currency-format",
+      "category": "cross_file_change",
+      "task_input": "修复跨 app.py 与 amounts.py 的金额格式，使 1250 分以 EUR 展示为 EUR 12.50。",
+      "workspace_baseline": "workspaces/cross-file-currency-format",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/cross-file-currency-format/scenario.json",
+      "expected_evidence_type": "deterministic_python_test",
+      "baseline_expected_outcome": "fail"
+    },
+    {
+      "id": "tool-invalid-arguments",
+      "category": "tool_failure",
+      "task_input": "将模拟工具的无效 path 参数失败归类为 tool_error，并保留字段路径。",
+      "workspace_baseline": "workspaces/tool-invalid-arguments",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/tool-invalid-arguments/scenario.json",
+      "expected_evidence_type": "tool_error_with_field_path",
+      "baseline_expected_outcome": "fail"
+    },
+    {
+      "id": "permission-write-denied",
+      "category": "permission_denied",
+      "task_input": "面对未授权写入请求，保留 permission_denied 结果且不执行写入。",
+      "workspace_baseline": "workspaces/permission-write-denied",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/permission-write-denied/scenario.json",
+      "expected_evidence_type": "permission_denied",
+      "baseline_expected_outcome": "pass"
+    },
+    {
+      "id": "context-conflicting-facts",
+      "category": "context_conflict",
+      "task_input": "检测相互冲突的项目事实，输出 conflict 而非静默拼接。",
+      "workspace_baseline": "workspaces/context-conflicting-facts",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/context-conflicting-facts/scenario.json",
+      "expected_evidence_type": "context_conflict",
+      "baseline_expected_outcome": "pass"
+    },
+    {
+      "id": "recovery-after-tool-error",
+      "category": "recovery",
+      "task_input": "首次工具调用失败后使用替代输入成功，保留失败和恢复证据。",
+      "workspace_baseline": "workspaces/recovery-after-tool-error",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/recovery-after-tool-error/scenario.json",
+      "expected_evidence_type": "recovery_trace",
+      "baseline_expected_outcome": "pass"
+    },
+    {
+      "id": "cancel-child-work",
+      "category": "cancellation",
+      "task_input": "取消子任务后确认结果分类为 cancelled，且不保留成功结论。",
+      "workspace_baseline": "workspaces/cancel-child-work",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/cancel-child-work/scenario.json",
+      "expected_evidence_type": "cancelled",
+      "baseline_expected_outcome": "pass"
+    },
+    {
+      "id": "provider-timeout",
+      "category": "timeout",
+      "task_input": "Provider 调用超过预算时分类为 timeout，并要求安全终止或重规划。",
+      "workspace_baseline": "workspaces/provider-timeout",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/provider-timeout/scenario.json",
+      "expected_evidence_type": "timeout",
+      "baseline_expected_outcome": "pass"
+    },
+    {
+      "id": "mcp-schema-path-error",
+      "category": "mcp_schema",
+      "task_input": "将 MCP 参数 path 的类型错误定位到字段路径。",
+      "workspace_baseline": "workspaces/mcp-schema-path-error",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/mcp-schema-path-error/scenario.json",
+      "expected_evidence_type": "mcp_schema_error",
+      "baseline_expected_outcome": "pass"
+    },
+    {
+      "id": "redact-token-evidence",
+      "category": "redaction",
+      "task_input": "持久化前脱敏 Bearer Token，证据只保留 redacted 标记。",
+      "workspace_baseline": "workspaces/redact-token-evidence",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/redact-token-evidence/scenario.json",
+      "expected_evidence_type": "redacted_evidence",
+      "baseline_expected_outcome": "pass"
+    },
+    {
+      "id": "resume-session-state",
+      "category": "session_resume",
+      "task_input": "从合成会话元数据恢复状态，保留 session_id 与 resumable 标识。",
+      "workspace_baseline": "workspaces/resume-session-state",
+      "acceptance_command": "python benchmarks/baseline_v0/verify_scenario.py benchmarks/baseline_v0/workspaces/resume-session-state/scenario.json",
+      "expected_evidence_type": "session_resume",
+      "baseline_expected_outcome": "pass"
+    }
+  ]
+}

@@ -384,3 +384,47 @@ class MemoryLifecycleChange:
             "proposal_memory_id": self.proposal_memory_id,
             "confirmed_by_user_id": self.confirmed_by_user_id,
         }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "MemoryLifecycleChange":
+        if not isinstance(raw, Mapping):
+            raise MemoryModelError("memory lifecycle change must be an object")
+        known = {
+            "change_id",
+            "kind",
+            "memory_ids",
+            "occurred_at",
+            "reason",
+            "evidence_refs",
+            "replacement_memory_id",
+            "proposal_memory_id",
+            "confirmed_by_user_id",
+        }
+        unknown = set(raw).difference(known)
+        if unknown:
+            raise MemoryModelError(f"memory lifecycle change has unknown field: {sorted(unknown)[0]}")
+        kind = raw.get("kind")
+        if not isinstance(kind, str):
+            raise MemoryModelError("kind must be a string")
+        for field_name in (
+            "replacement_memory_id",
+            "proposal_memory_id",
+            "confirmed_by_user_id",
+        ):
+            value = raw.get(field_name)
+            if value is not None and not isinstance(value, str):
+                raise MemoryModelError(f"{field_name} must be a string or null")
+        return cls(
+            change_id=_identifier(raw.get("change_id"), field="change_id"),
+            kind=cast(MemoryChangeKind, kind),
+            memory_ids=_identifier_tuple(raw.get("memory_ids"), field="memory_ids"),
+            occurred_at=_parse_utc(raw.get("occurred_at"), field="occurred_at"),
+            reason=_text(raw.get("reason"), field="reason"),
+            evidence_refs=_identifier_tuple(
+                raw.get("evidence_refs"),
+                field="evidence_refs",
+            ),
+            replacement_memory_id=raw.get("replacement_memory_id"),  # type: ignore[arg-type]
+            proposal_memory_id=raw.get("proposal_memory_id"),  # type: ignore[arg-type]
+            confirmed_by_user_id=raw.get("confirmed_by_user_id"),  # type: ignore[arg-type]
+        )

@@ -1,0 +1,6 @@
+{
+  "case_id": "resume-session-state",
+  "kind": "observed_value",
+  "observed": "session_resumed",
+  "expected": "session_resumed"
+}

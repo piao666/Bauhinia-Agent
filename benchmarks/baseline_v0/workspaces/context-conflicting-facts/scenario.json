@@ -1,0 +1,6 @@
+{
+  "case_id": "context-conflicting-facts",
+  "kind": "observed_value",
+  "observed": "context_conflict",
+  "expected": "context_conflict"
+}

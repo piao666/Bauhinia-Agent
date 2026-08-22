@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any, ClassVar, Generic, Mapping, TypeVar
 
 from bauhinia_agent.evolution.identifiers import require_evo_id
@@ -25,6 +26,8 @@ EVO_EVENT_TYPES = frozenset(
         "EvidenceRecorded",
         "OutcomeClassified",
         "MemoryCreated",
+        "MemoryLifecycleChanged",
+        "ContextPackRecorded",
         "MemoryUsed",
         "ExperienceCandidateCreated",
         "CandidateArtifactCreated",
@@ -48,6 +51,8 @@ EVO_EVENT_TYPES = frozenset(
 )
 _COLLABORATION_STATUSES = frozenset({"success", "failure", "cancelled", "timeout", "permission_denied"})
 _COLLABORATION_CONFLICT_KINDS = frozenset({"resource", "conclusion"})
+_COLLABORATION_ROLES = frozenset({"planner", "researcher", "executor", "verifier", "critic", "curator"})
+_COLLABORATION_CLAIM_FORMATS = frozenset({"v2_full", "v1_fingerprint_only"})
 
 
 class EvoEventError(ValueError):
@@ -126,6 +131,41 @@ def _string_list(value: object, *, field: str, default: tuple[str, ...] = ()) ->
     for index, item in enumerate(value):
         result.append(_require_text(item, field=f"{field}[{index}]"))
     return tuple(result)
+
+
+def _non_negative_int_list(value: object, *, field: str) -> tuple[int, ...]:
+    if not isinstance(value, list):
+        raise EvoEventError(f"{field} must be a list of non-negative integers")
+    return tuple(_require_non_negative_int(item, field=f"{field}[{index}]") for index, item in enumerate(value))
+
+
+def _bool_list(value: object, *, field: str) -> tuple[bool, ...]:
+    if not isinstance(value, list):
+        raise EvoEventError(f"{field} must be a list of booleans")
+    return tuple(_require_bool(item, field=f"{field}[{index}]") for index, item in enumerate(value))
+
+
+def _validated_identifier_list(
+    value: object,
+    *,
+    field: str,
+    allow_empty: bool,
+    allow_duplicates: bool = False,
+) -> tuple[str, ...]:
+    result = _string_list(value, field=field)
+    if not allow_empty and not result:
+        raise EvoEventError(f"{field} must not be empty")
+    for index, item in enumerate(result):
+        require_evo_id(item, field=f"{field}[{index}]")
+    if not allow_duplicates and len(result) != len(set(result)):
+        raise EvoEventError(f"{field} must not contain duplicates")
+    return result
+
+
+def _optional_identifier(value: object, *, field: str) -> str | None:
+    if value is None:
+        return None
+    return require_evo_id(value, field=field)
 
 
 def _json_value(value: object, *, field: str) -> object:
@@ -352,21 +392,353 @@ class MemoryCreatedPayload(EvoPayload):
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryLifecycleChangedPayload(EvoPayload):
+    """One append-only memory lifecycle decision.
+
+    Cross-record state and optimistic-concurrency semantics are intentionally
+    left to the memory projection.  This payload validates only the stable
+    event contract and the relationships intrinsic to each action.
+    """
+
+    lifecycle_schema_version: str
+    change_id: str
+    project_id: str
+    action: str
+    memory_ids: tuple[str, ...]
+    reason: str
+    evidence_refs: tuple[str, ...]
+    actor_kind: str
+    actor_id: str
+    basis_event_ids: tuple[str, ...]
+    replacement_memory_id: str | None = None
+    proposal_memory_id: str | None = None
+    confirmed_by_user_id: str | None = None
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "MemoryLifecycleChangedPayload":
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "lifecycle_schema_version",
+                "change_id",
+                "project_id",
+                "action",
+                "memory_ids",
+                "reason",
+                "evidence_refs",
+                "actor_kind",
+                "actor_id",
+                "basis_event_ids",
+                "replacement_memory_id",
+                "proposal_memory_id",
+                "confirmed_by_user_id",
+            },
+        )
+        action = _require_text(values.get("action"), field="action")
+        if action not in {"supersede", "invalidate", "propose_merge", "confirm"}:
+            raise EvoEventError(f"unsupported memory lifecycle action: {action!r}")
+        actor_kind = _require_text(values.get("actor_kind"), field="actor_kind")
+        if actor_kind not in {"system", "user", "maintainer"}:
+            raise EvoEventError(f"unsupported memory lifecycle actor_kind: {actor_kind!r}")
+
+        memory_ids = _validated_identifier_list(values.get("memory_ids"), field="memory_ids", allow_empty=False)
+        evidence_refs = _validated_identifier_list(values.get("evidence_refs"), field="evidence_refs", allow_empty=False)
+        basis_event_ids = _validated_identifier_list(
+            values.get("basis_event_ids"),
+            field="basis_event_ids",
+            allow_empty=False,
+            allow_duplicates=True,
+        )
+        replacement_memory_id = _optional_identifier(values.get("replacement_memory_id"), field="replacement_memory_id")
+        proposal_memory_id = _optional_identifier(values.get("proposal_memory_id"), field="proposal_memory_id")
+        confirmed_by_user_id = _optional_text(values.get("confirmed_by_user_id"), field="confirmed_by_user_id")
+
+        if action == "supersede":
+            if len(memory_ids) != 1 or replacement_memory_id is None:
+                raise EvoEventError("supersede requires exactly one memory_id and replacement_memory_id")
+            if replacement_memory_id in memory_ids:
+                raise EvoEventError("replacement_memory_id must differ from the superseded memory")
+            if proposal_memory_id is not None or confirmed_by_user_id is not None:
+                raise EvoEventError("supersede does not accept proposal_memory_id or confirmed_by_user_id")
+        elif action == "invalidate":
+            if len(memory_ids) != 1:
+                raise EvoEventError("invalidate requires exactly one memory_id")
+            if replacement_memory_id is not None or proposal_memory_id is not None or confirmed_by_user_id is not None:
+                raise EvoEventError("invalidate does not accept replacement, proposal, or confirmation fields")
+        elif action == "propose_merge":
+            if len(memory_ids) < 2 or proposal_memory_id is None:
+                raise EvoEventError("propose_merge requires at least two memory_ids and proposal_memory_id")
+            if proposal_memory_id in memory_ids:
+                raise EvoEventError("proposal_memory_id must differ from the source memories")
+            if replacement_memory_id is not None or confirmed_by_user_id is not None:
+                raise EvoEventError("propose_merge does not accept replacement_memory_id or confirmed_by_user_id")
+        else:
+            if len(memory_ids) != 1 or confirmed_by_user_id is None:
+                raise EvoEventError("confirm requires exactly one memory_id and confirmed_by_user_id")
+            if actor_kind == "system":
+                raise EvoEventError("confirm requires a user or maintainer actor")
+            if replacement_memory_id is not None or proposal_memory_id is not None:
+                raise EvoEventError("confirm does not accept replacement_memory_id or proposal_memory_id")
+
+        return cls(
+            lifecycle_schema_version=_require_text(values.get("lifecycle_schema_version"), field="lifecycle_schema_version"),
+            change_id=require_evo_id(values.get("change_id"), field="change_id"),
+            project_id=_require_text(values.get("project_id"), field="project_id"),
+            action=action,
+            memory_ids=memory_ids,
+            reason=_require_text(values.get("reason"), field="reason"),
+            evidence_refs=evidence_refs,
+            actor_kind=actor_kind,
+            actor_id=_require_text(values.get("actor_id"), field="actor_id"),
+            basis_event_ids=basis_event_ids,
+            replacement_memory_id=replacement_memory_id,
+            proposal_memory_id=proposal_memory_id,
+            confirmed_by_user_id=confirmed_by_user_id,
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContextPackRecordedPayload(EvoPayload):
+    """Deterministic record of one budgeted long-term-memory context pack."""
+
+    context_pack_schema_version: str
+    context_pack_id: str
+    query_signature_hash: str
+    token_budget: int
+    used_tokens: int
+    estimator_id: str
+    selected_memory_ids: tuple[str, ...]
+    selected_ranks: tuple[int, ...]
+    selected_original_token_costs: tuple[int, ...]
+    selected_packed_token_costs: tuple[int, ...]
+    selected_truncated: tuple[bool, ...]
+    selected_start_offsets: tuple[int, ...]
+    selected_end_offsets: tuple[int, ...]
+    omitted_memory_ids: tuple[str, ...]
+    omitted_reasons: tuple[str, ...]
+    extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "ContextPackRecordedPayload":
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "context_pack_schema_version",
+                "context_pack_id",
+                "query_signature_hash",
+                "token_budget",
+                "used_tokens",
+                "estimator_id",
+                "selected_memory_ids",
+                "selected_ranks",
+                "selected_original_token_costs",
+                "selected_packed_token_costs",
+                "selected_truncated",
+                "selected_start_offsets",
+                "selected_end_offsets",
+                "omitted_memory_ids",
+                "omitted_reasons",
+            },
+        )
+        selected_memory_ids_raw = values.get("selected_memory_ids")
+        omitted_memory_ids_raw = values.get("omitted_memory_ids")
+        omitted_reasons_raw = values.get("omitted_reasons")
+        if not isinstance(selected_memory_ids_raw, list):
+            raise EvoEventError("selected_memory_ids must be a list of strings")
+        if not isinstance(omitted_memory_ids_raw, list):
+            raise EvoEventError("omitted_memory_ids must be a list of strings")
+        if not isinstance(omitted_reasons_raw, list):
+            raise EvoEventError("omitted_reasons must be a list of strings")
+
+        selected_memory_ids = _validated_identifier_list(
+            selected_memory_ids_raw,
+            field="selected_memory_ids",
+            allow_empty=True,
+        )
+        selected_ranks = _non_negative_int_list(values.get("selected_ranks"), field="selected_ranks")
+        selected_original_token_costs = _non_negative_int_list(
+            values.get("selected_original_token_costs"),
+            field="selected_original_token_costs",
+        )
+        selected_packed_token_costs = _non_negative_int_list(
+            values.get("selected_packed_token_costs"),
+            field="selected_packed_token_costs",
+        )
+        selected_truncated = _bool_list(values.get("selected_truncated"), field="selected_truncated")
+        selected_start_offsets = _non_negative_int_list(
+            values.get("selected_start_offsets"),
+            field="selected_start_offsets",
+        )
+        selected_end_offsets = _non_negative_int_list(
+            values.get("selected_end_offsets"),
+            field="selected_end_offsets",
+        )
+        selected_lengths = {
+            len(selected_memory_ids),
+            len(selected_ranks),
+            len(selected_original_token_costs),
+            len(selected_packed_token_costs),
+            len(selected_truncated),
+            len(selected_start_offsets),
+            len(selected_end_offsets),
+        }
+        if len(selected_lengths) != 1:
+            raise EvoEventError("selected context-pack arrays must have the same length")
+        if any(rank <= 0 for rank in selected_ranks):
+            raise EvoEventError("selected_ranks must contain positive integers")
+        if tuple(sorted(set(selected_ranks))) != selected_ranks:
+            raise EvoEventError("selected_ranks must be unique and strictly increasing")
+        if any(
+            end <= start
+            for start, end in zip(
+                selected_start_offsets,
+                selected_end_offsets,
+                strict=True,
+            )
+        ):
+            raise EvoEventError("selected context-pack offsets must describe non-empty forward ranges")
+        if any(
+            not truncated and start != 0
+            for truncated, start in zip(
+                selected_truncated,
+                selected_start_offsets,
+                strict=True,
+            )
+        ):
+            raise EvoEventError("an untruncated context-pack item must start at offset zero")
+        if any(
+            packed > original
+            for packed, original in zip(
+                selected_packed_token_costs,
+                selected_original_token_costs,
+                strict=True,
+            )
+        ):
+            raise EvoEventError("selected packed token cost must not exceed original token cost")
+
+        omitted_memory_ids = _validated_identifier_list(
+            omitted_memory_ids_raw,
+            field="omitted_memory_ids",
+            allow_empty=True,
+        )
+        omitted_reasons = _string_list(omitted_reasons_raw, field="omitted_reasons")
+        if len(omitted_memory_ids) != len(omitted_reasons):
+            raise EvoEventError("omitted_memory_ids and omitted_reasons must have the same length")
+        overlap = set(selected_memory_ids).intersection(omitted_memory_ids)
+        if overlap:
+            raise EvoEventError("a Memory cannot be both selected and omitted in one Context Pack")
+
+        token_budget = _require_non_negative_int(values.get("token_budget"), field="token_budget")
+        used_tokens = _require_non_negative_int(values.get("used_tokens"), field="used_tokens")
+        if used_tokens > token_budget:
+            raise EvoEventError("used_tokens must not exceed token_budget")
+
+        query_signature_hash = _require_text(
+            values.get("query_signature_hash"),
+            field="query_signature_hash",
+        )
+        if len(query_signature_hash) != 64 or any(character not in "0123456789abcdef" for character in query_signature_hash):
+            raise EvoEventError("query_signature_hash must be a lowercase SHA-256 digest")
+        if not selected_memory_ids and used_tokens != 0:
+            raise EvoEventError("an empty Context Pack must use zero tokens")
+
+        return cls(
+            context_pack_schema_version=_require_text(
+                values.get("context_pack_schema_version"),
+                field="context_pack_schema_version",
+            ),
+            context_pack_id=require_evo_id(
+                values.get("context_pack_id"),
+                field="context_pack_id",
+                kind="context_pack",
+            ),
+            query_signature_hash=query_signature_hash,
+            token_budget=token_budget,
+            used_tokens=used_tokens,
+            estimator_id=_require_text(values.get("estimator_id"), field="estimator_id"),
+            selected_memory_ids=selected_memory_ids,
+            selected_ranks=selected_ranks,
+            selected_original_token_costs=selected_original_token_costs,
+            selected_packed_token_costs=selected_packed_token_costs,
+            selected_truncated=selected_truncated,
+            selected_start_offsets=selected_start_offsets,
+            selected_end_offsets=selected_end_offsets,
+            omitted_memory_ids=omitted_memory_ids,
+            omitted_reasons=omitted_reasons,
+            extensions=extensions,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryUsedPayload(EvoPayload):
     reason: str
     retrieval_rank: int | None = None
     helpfulness: str | None = None
     extensions: dict[str, object] = field(default_factory=dict, repr=False)
+    context_pack_id: str | None = None
+    usage_status: str = "legacy_unattributed"
+    packed_token_cost: int | None = None
+    truncated: bool = False
+    outcome_event_id: str | None = None
+    verification_evidence_refs: tuple[str, ...] = ()
+    feedback_status: str = "legacy_unattributed"
 
     @classmethod
     def from_dict(cls, raw: object) -> "MemoryUsedPayload":
-        values, extensions = _payload_parts(raw, known={"reason", "retrieval_rank", "helpfulness"})
+        values, extensions = _payload_parts(
+            raw,
+            known={
+                "reason",
+                "retrieval_rank",
+                "helpfulness",
+                "context_pack_id",
+                "usage_status",
+                "packed_token_cost",
+                "truncated",
+                "outcome_event_id",
+                "verification_evidence_refs",
+                "feedback_status",
+            },
+        )
         rank = values.get("retrieval_rank")
+        usage_status = _require_text(
+            values.get("usage_status", "legacy_unattributed"),
+            field="usage_status",
+        )
+        if usage_status not in {"used", "not_used", "legacy_unattributed"}:
+            raise EvoEventError(f"unsupported memory usage_status: {usage_status!r}")
+        feedback_status = _require_text(
+            values.get("feedback_status", "legacy_unattributed"),
+            field="feedback_status",
+        )
+        if feedback_status not in {"helpful", "harmful", "neutral", "unknown", "legacy_unattributed"}:
+            raise EvoEventError(f"unsupported memory feedback_status: {feedback_status!r}")
+        context_pack_id = _optional_identifier(values.get("context_pack_id"), field="context_pack_id")
+        if usage_status in {"used", "not_used"} and context_pack_id is None:
+            raise EvoEventError(f"{usage_status} memory usage requires context_pack_id")
+        outcome_event_id = _optional_identifier(values.get("outcome_event_id"), field="outcome_event_id")
+        verification_evidence_refs = _validated_identifier_list(
+            values.get("verification_evidence_refs"),
+            field="verification_evidence_refs",
+            allow_empty=True,
+        )
+        if feedback_status in {"helpful", "harmful", "neutral"} and (outcome_event_id is None or not verification_evidence_refs):
+            raise EvoEventError(f"{feedback_status} feedback requires outcome_event_id and verification_evidence_refs")
+        packed_token_cost = values.get("packed_token_cost")
         return cls(
             reason=_require_text(values.get("reason"), field="reason"),
             retrieval_rank=None if rank is None else _require_non_negative_int(rank, field="retrieval_rank"),
             helpfulness=_optional_text(values.get("helpfulness"), field="helpfulness"),
             extensions=extensions,
+            context_pack_id=context_pack_id,
+            usage_status=usage_status,
+            packed_token_cost=(None if packed_token_cost is None else _require_non_negative_int(packed_token_cost, field="packed_token_cost")),
+            truncated=_require_bool(values.get("truncated", False), field="truncated"),
+            outcome_event_id=outcome_event_id,
+            verification_evidence_refs=verification_evidence_refs,
+            feedback_status=feedback_status,
         )
 
 
@@ -1201,6 +1573,106 @@ class CollaborationTaskDelegatedPayload(EvoPayload):
         )
 
 
+def collaboration_claim_fingerprint(
+    *,
+    claim_key: str,
+    conclusion: str,
+    evidence_refs: tuple[str, ...],
+    source_role: str,
+    independence_key: str,
+) -> str:
+    """Return the v2 fingerprint covering every persisted Claim field."""
+
+    material = "\0".join(
+        (
+            _require_text(claim_key, field="claim_key"),
+            _require_text(conclusion, field="conclusion"),
+            *sorted(evidence_refs),
+            _require_text(source_role, field="source_role"),
+            _require_text(independence_key, field="independence_key"),
+        )
+    )
+    return sha256(material.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationClaimPayload:
+    """A complete, replayable collaboration Claim embedded in a result fact."""
+
+    claim_key: str
+    conclusion: str
+    evidence_refs: tuple[str, ...]
+    source_role: str
+    independence_key: str
+    fingerprint: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.claim_key, field="claim_key")
+        _require_text(self.conclusion, field="conclusion")
+        if len(self.evidence_refs) != len(set(self.evidence_refs)):
+            raise EvoEventError("evidence_refs must not contain duplicates")
+        for index, evidence_ref in enumerate(self.evidence_refs):
+            _require_text(evidence_ref, field=f"evidence_refs[{index}]")
+        if self.source_role not in _COLLABORATION_ROLES:
+            raise EvoEventError(f"unknown collaboration role: {self.source_role!r}")
+        _require_text(self.independence_key, field="independence_key")
+        expected = collaboration_claim_fingerprint(
+            claim_key=self.claim_key,
+            conclusion=self.conclusion,
+            evidence_refs=self.evidence_refs,
+            source_role=self.source_role,
+            independence_key=self.independence_key,
+        )
+        if self.fingerprint != expected:
+            raise EvoEventError("fingerprint does not match the complete Claim")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "claim_key": self.claim_key,
+            "conclusion": self.conclusion,
+            "evidence_refs": list(self.evidence_refs),
+            "source_role": self.source_role,
+            "independence_key": self.independence_key,
+            "fingerprint": self.fingerprint,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "CollaborationClaimPayload":
+        if not isinstance(raw, Mapping):
+            raise EvoEventError("claims[] must be an object")
+        known = {"claim_key", "conclusion", "evidence_refs", "source_role", "independence_key", "fingerprint"}
+        unknown = set(raw).difference(known)
+        if unknown:
+            raise EvoEventError(f"claims[] has unknown field: {sorted(unknown)[0]}")
+        claim_key = _require_text(raw.get("claim_key"), field="claims[].claim_key")
+        conclusion = _require_text(raw.get("conclusion"), field="claims[].conclusion")
+        evidence_refs = _string_list(raw.get("evidence_refs"), field="claims[].evidence_refs")
+        if len(evidence_refs) != len(set(evidence_refs)):
+            raise EvoEventError("claims[].evidence_refs must not contain duplicates")
+        source_role = _require_text(raw.get("source_role"), field="claims[].source_role")
+        if source_role not in _COLLABORATION_ROLES:
+            raise EvoEventError(f"unknown collaboration role: {source_role!r}")
+        independence_key = _require_text(raw.get("independence_key"), field="claims[].independence_key")
+        fingerprint = _require_text(raw.get("fingerprint"), field="claims[].fingerprint")
+        expected = collaboration_claim_fingerprint(
+            claim_key=claim_key,
+            conclusion=conclusion,
+            evidence_refs=evidence_refs,
+            source_role=source_role,
+            independence_key=independence_key,
+        )
+        if fingerprint != expected:
+            raise EvoEventError("claims[].fingerprint does not match the complete Claim")
+        return cls(
+            claim_key=claim_key,
+            conclusion=conclusion,
+            evidence_refs=evidence_refs,
+            source_role=source_role,
+            independence_key=independence_key,
+            fingerprint=fingerprint,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class CollaborationTaskResultRecordedPayload(EvoPayload):
     collaboration_id: str
@@ -1210,11 +1682,71 @@ class CollaborationTaskResultRecordedPayload(EvoPayload):
     evidence_refs: tuple[str, ...]
     confidence: float
     eligible_for_learning: bool
+    result_id: str | None = None
     child_run_id: str | None = None
     child_session_id: str | None = None
+    claims: tuple[CollaborationClaimPayload, ...] = ()
     claim_fingerprints: tuple[str, ...] = ()
+    claim_format: str = "v2_full"
+    confidence_source: str = "legacy_unattributed"
+    confidence_source_event_id: str | None = None
     files_changed: tuple[str, ...] = ()
     extensions: dict[str, object] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        _require_text(self.collaboration_id, field="collaboration_id")
+        _require_text(self.assignment_id, field="assignment_id")
+        if self.status not in _COLLABORATION_STATUSES:
+            raise EvoEventError(f"unknown collaboration status: {self.status!r}")
+        _require_text(self.summary, field="summary")
+        _require_confidence(self.confidence)
+        if self.claim_format not in _COLLABORATION_CLAIM_FORMATS:
+            raise EvoEventError(f"unknown collaboration Claim format: {self.claim_format!r}")
+        if self.claim_format == "v1_fingerprint_only" and self.claims:
+            raise EvoEventError("v1_fingerprint_only results cannot contain complete claims")
+        if self.claims and self.claim_fingerprints != tuple(claim.fingerprint for claim in self.claims):
+            raise EvoEventError("claim_fingerprints do not match complete claims")
+        evidence_refs = set(self.evidence_refs)
+        if any(not set(claim.evidence_refs).issubset(evidence_refs) for claim in self.claims):
+            raise EvoEventError("Claim evidence_refs must be a subset of result evidence_refs")
+        _require_text(self.confidence_source, field="confidence_source")
+        if self.eligible_for_learning and self.claim_format == "v2_full":
+            if not self.claims:
+                raise EvoEventError("eligible v2 results require at least one complete Claim")
+            if self.confidence_source != "outcome_event" or self.confidence_source_event_id is None:
+                raise EvoEventError("eligible v2 results require an Outcome confidence source")
+
+    @property
+    def claims_rebuildable(self) -> bool:
+        return self.claim_format == "v2_full"
+
+    def to_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "collaboration_id": self.collaboration_id,
+            "assignment_id": self.assignment_id,
+            "status": self.status,
+            "summary": self.summary,
+            "evidence_refs": list(self.evidence_refs),
+            "confidence": self.confidence,
+            "eligible_for_learning": self.eligible_for_learning,
+            "result_id": self.result_id,
+            "child_run_id": self.child_run_id,
+            "child_session_id": self.child_session_id,
+            "claims": [claim.to_dict() for claim in self.claims],
+            "claim_fingerprints": list(self.claim_fingerprints),
+            "claim_format": self.claim_format,
+            "confidence_source": self.confidence_source,
+            "confidence_source_event_id": self.confidence_source_event_id,
+            "files_changed": list(self.files_changed),
+        }
+        overlap = set(result).intersection(self.extensions)
+        if overlap:
+            raise EvoEventError(f"payload extensions conflict with known fields: {sorted(overlap)}")
+        for key, value in self.extensions.items():
+            if not isinstance(key, str):
+                raise EvoEventError("payload extension keys must be strings")
+            result[key] = _json_value(value, field=f"payload.{key}")
+        return result
 
     @classmethod
     def from_dict(cls, raw: object) -> "CollaborationTaskResultRecordedPayload":
@@ -1228,15 +1760,41 @@ class CollaborationTaskResultRecordedPayload(EvoPayload):
                 "evidence_refs",
                 "confidence",
                 "eligible_for_learning",
+                "result_id",
                 "child_run_id",
                 "child_session_id",
+                "claims",
                 "claim_fingerprints",
+                "claim_format",
+                "confidence_source",
+                "confidence_source_event_id",
                 "files_changed",
             },
         )
         status = _require_text(values.get("status"), field="status")
         if status not in _COLLABORATION_STATUSES:
             raise EvoEventError(f"unknown collaboration status: {status!r}")
+        raw_claims = values.get("claims")
+        if raw_claims is None:
+            claims: tuple[CollaborationClaimPayload, ...] = ()
+        elif not isinstance(raw_claims, list):
+            raise EvoEventError("claims must be a list of Claim objects")
+        else:
+            claims = tuple(CollaborationClaimPayload.from_dict(item) for item in raw_claims)
+        claim_fingerprints = _string_list(values.get("claim_fingerprints"), field="claim_fingerprints")
+        claim_format = values.get("claim_format")
+        if claim_format is None:
+            claim_format = "v2_full" if raw_claims is not None else "v1_fingerprint_only"
+        claim_format = _require_text(claim_format, field="claim_format")
+        if claim_format not in _COLLABORATION_CLAIM_FORMATS:
+            raise EvoEventError(f"unknown collaboration Claim format: {claim_format!r}")
+        if claim_format == "v1_fingerprint_only" and claims:
+            raise EvoEventError("v1_fingerprint_only results cannot contain complete claims")
+        if claims:
+            expected_fingerprints = tuple(claim.fingerprint for claim in claims)
+            if claim_fingerprints and claim_fingerprints != expected_fingerprints:
+                raise EvoEventError("claim_fingerprints do not match complete claims")
+            claim_fingerprints = expected_fingerprints
         return cls(
             collaboration_id=_require_text(values.get("collaboration_id"), field="collaboration_id"),
             assignment_id=_require_text(values.get("assignment_id"), field="assignment_id"),
@@ -1245,9 +1803,14 @@ class CollaborationTaskResultRecordedPayload(EvoPayload):
             evidence_refs=_string_list(values.get("evidence_refs"), field="evidence_refs"),
             confidence=_require_confidence(values.get("confidence")),
             eligible_for_learning=_require_bool(values.get("eligible_for_learning"), field="eligible_for_learning"),
+            result_id=_optional_text(values.get("result_id"), field="result_id"),
             child_run_id=_optional_text(values.get("child_run_id"), field="child_run_id"),
             child_session_id=_optional_text(values.get("child_session_id"), field="child_session_id"),
-            claim_fingerprints=_string_list(values.get("claim_fingerprints"), field="claim_fingerprints"),
+            claims=claims,
+            claim_fingerprints=claim_fingerprints,
+            claim_format=claim_format,
+            confidence_source=_require_text(values.get("confidence_source", "legacy_unattributed"), field="confidence_source"),
+            confidence_source_event_id=_optional_text(values.get("confidence_source_event_id"), field="confidence_source_event_id"),
             files_changed=_string_list(values.get("files_changed"), field="files_changed"),
             extensions=extensions,
         )
@@ -1356,6 +1919,7 @@ class EvoReferences:
     self_model_id: str | None = None
     parent_event_id: str | None = None
     extensions: dict[str, object] = field(default_factory=dict, repr=False)
+    context_pack_id: str | None = None
 
     def __post_init__(self) -> None:
         require_evo_id(self.run_id, field="run_id", kind="run")
@@ -1364,6 +1928,7 @@ class EvoReferences:
             "plan_id",
             "node_id",
             "memory_id",
+            "context_pack_id",
             "candidate_id",
             "artifact_id",
             "evidence_id",
@@ -1412,6 +1977,7 @@ class EvoReferences:
             plan_id=None if values.get("plan_id") is None else require_evo_id(values["plan_id"], field="plan_id", kind="plan"),
             node_id=None if values.get("node_id") is None else require_evo_id(values["node_id"], field="node_id", kind="node"),
             memory_id=None if values.get("memory_id") is None else require_evo_id(values["memory_id"], field="memory_id", kind="memory"),
+            context_pack_id=(None if values.get("context_pack_id") is None else require_evo_id(values["context_pack_id"], field="context_pack_id", kind="context_pack")),
             candidate_id=None if values.get("candidate_id") is None else require_evo_id(values["candidate_id"], field="candidate_id", kind="candidate"),
             artifact_id=None if values.get("artifact_id") is None else require_evo_id(values["artifact_id"], field="artifact_id", kind="artifact"),
             evidence_id=None if values.get("evidence_id") is None else require_evo_id(values["evidence_id"], field="evidence_id", kind="evidence"),
@@ -1540,6 +2106,8 @@ EvoEvent._payload_types = {
     "EvidenceRecorded": EvidenceRecordedPayload,
     "OutcomeClassified": OutcomeClassifiedPayload,
     "MemoryCreated": MemoryCreatedPayload,
+    "MemoryLifecycleChanged": MemoryLifecycleChangedPayload,
+    "ContextPackRecorded": ContextPackRecordedPayload,
     "MemoryUsed": MemoryUsedPayload,
     "ExperienceCandidateCreated": ExperienceCandidateCreatedPayload,
     "CandidateArtifactCreated": CandidateArtifactCreatedPayload,

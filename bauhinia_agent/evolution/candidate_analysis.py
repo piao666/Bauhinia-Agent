@@ -19,7 +19,6 @@ from bauhinia_agent.evolution.events import (
 from bauhinia_agent.evolution.identifiers import new_evo_id
 from bauhinia_agent.evolution.store import EvoAppendResult, EvoEventStore, EvoStoreError
 
-
 _DUPLICATE_SIMILARITY = 0.70
 _CONFLICT_SIMILARITY = 0.40
 _TOKEN_RE = re.compile(r"[a-z0-9_]{2,}")
@@ -119,7 +118,9 @@ class CandidateAnalysisService:
             if result.record is None:
                 return CandidateAnalysisResult(False, tuple(merge_proposals), tuple(conflict_groups), result.diagnostic)
             if not isinstance(result.record, CandidateMergeProposal):
-                return CandidateAnalysisResult(False, tuple(merge_proposals), tuple(conflict_groups), CandidateAnalysisDiagnostic("candidate_analysis_recording_failed", "merge proposal returned an invalid record type"))
+                return CandidateAnalysisResult(
+                    False, tuple(merge_proposals), tuple(conflict_groups), CandidateAnalysisDiagnostic("candidate_analysis_recording_failed", "merge proposal returned an invalid record type")
+                )
             merge_proposals.append(result.record)
             diagnostic = result.diagnostic or diagnostic
             existing_merges.add(payload.cluster_id)
@@ -132,7 +133,9 @@ class CandidateAnalysisService:
             if result.record is None:
                 return CandidateAnalysisResult(False, tuple(merge_proposals), tuple(conflict_groups), result.diagnostic)
             if not isinstance(result.record, CandidateConflictGroup):
-                return CandidateAnalysisResult(False, tuple(merge_proposals), tuple(conflict_groups), CandidateAnalysisDiagnostic("candidate_analysis_recording_failed", "conflict group returned an invalid record type"))
+                return CandidateAnalysisResult(
+                    False, tuple(merge_proposals), tuple(conflict_groups), CandidateAnalysisDiagnostic("candidate_analysis_recording_failed", "conflict group returned an invalid record type")
+                )
             conflict_groups.append(result.record)
             diagnostic = result.diagnostic or diagnostic
             existing_conflicts.add(payload.conflict_group_id)
@@ -190,9 +193,7 @@ def _existing_ids(events: list[EvoEvent], event_type: str, field: str) -> set[st
 def _duplicate_groups(candidates: list[EvoEvent[ExperienceCandidateCreatedPayload]]) -> list[tuple[EvoEvent[ExperienceCandidateCreatedPayload], ...]]:
     return _connected_groups(
         candidates,
-        lambda left, right: left.payload.scope == right.payload.scope
-        and left.payload.kind == right.payload.kind
-        and _similarity(left, right) >= _DUPLICATE_SIMILARITY,
+        lambda left, right: left.payload.scope == right.payload.scope and left.payload.kind == right.payload.kind and _similarity(left, right) >= _DUPLICATE_SIMILARITY,
     )
 
 

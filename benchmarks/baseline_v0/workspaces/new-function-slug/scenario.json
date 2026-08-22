@@ -1,0 +1,8 @@
+{
+  "case_id": "new-function-slug",
+  "kind": "python_call",
+  "module": "app.py",
+  "function": "slugify",
+  "args": ["Hello, World!"],
+  "expected": "hello-world"
+}

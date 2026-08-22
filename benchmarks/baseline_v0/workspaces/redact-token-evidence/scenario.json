@@ -1,0 +1,6 @@
+{
+  "case_id": "redact-token-evidence",
+  "kind": "observed_value",
+  "observed": "redacted_evidence",
+  "expected": "redacted_evidence"
+}

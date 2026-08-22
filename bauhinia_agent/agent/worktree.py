@@ -25,6 +25,7 @@ from bauhinia_agent.utils.execution_sandbox import ExecutionSandbox
 
 WORKTREE_DIRNAME = "fc-worktrees"
 _DIFF_STAT_LIMIT = 8000
+_GIT_TIMEOUT_SECONDS = 30.0
 
 
 class WorktreeError(RuntimeError):
@@ -73,6 +74,14 @@ def _run_git(cwd: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
             encoding="utf-8",
             errors="replace",
             check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            ["git", *args],
+            returncode=124,
+            stdout="",
+            stderr=f"git command timed out after {_GIT_TIMEOUT_SECONDS:g}s",
         )
     except OSError as exc:
         return subprocess.CompletedProcess(["git", *args], returncode=1, stdout="", stderr=str(exc))
@@ -201,6 +210,17 @@ class WorktreeManager:
         if result.returncode != 0:
             raise WorktreeError(result.stderr.strip() or "git worktree remove 失败。")
         _run_git(self.project_root, ["worktree", "prune"])
+
+    def discard(self, worktree: Worktree) -> None:
+        """Remove a failed/cancelled worktree and its private branch."""
+
+        self.remove(worktree, force=True)
+        result = _run_git(
+            self.project_root,
+            ["branch", "-D", worktree.branch],
+        )
+        if result.returncode != 0:
+            raise WorktreeError(result.stderr.strip() or f"failed to delete isolated branch: {worktree.branch}")
 
 
 def _sanitize_name(name: str) -> str:

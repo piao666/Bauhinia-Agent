@@ -54,12 +54,26 @@ def _trial(
     environment: str = "b" * 64,
     status: str = "completed",
     risk_events: tuple[str, ...] = (),
+    dangling_evidence: bool = False,
 ) -> EvoEvent:
     trial_id = new_evo_id("eval_trial")
+    run_id = new_evo_id("run")
+    evidence = EvidenceAdapter(store).record(
+        EvidenceInput(
+            run_id=run_id,
+            evidence_type="test",
+            source="pytest",
+            summary="passed" if success else "failed",
+            verified=True,
+            command="pytest -q",
+            exit_code=0 if success else 1,
+        )
+    )
+    assert evidence.evidence is not None
     event = EvoEvent(
         event_id=new_evo_id("event"),
         event_type="EvaluationTrialRecorded",
-        refs=EvoReferences(run_id=new_evo_id("run"), evaluation_id=trial_id),
+        refs=EvoReferences(run_id=run_id, evaluation_id=trial_id),
         payload=EvaluationTrialRecordedPayload(
             evaluation_schema_version="v1",
             trial_id=trial_id,
@@ -87,7 +101,7 @@ def _trial(
             cost=2.0,
             latency_ms=25.0,
             risk_events=risk_events,
-            evidence_refs=(),
+            evidence_refs=(new_evo_id("evidence") if dangling_evidence else evidence.evidence.evidence_id,),
             verification_commands=("pytest -q",),
             verification_skipped=False,
             verification_coverage=1.0,
@@ -194,3 +208,7 @@ def test_invalid_trial_and_mismatched_model_are_rejected(tmp_path) -> None:
     valid = _trial(store, success=True)
     with pytest.raises(SelfModelError, match="model"):
         service.record_observation(_classification(model="f" * 64), source_event_id=valid.event_id)
+
+    dangling = _trial(store, success=True, dangling_evidence=True)
+    with pytest.raises(SelfModelError, match="Evidence is invalid"):
+        service.record_observation(_classification(), source_event_id=dangling.event_id)

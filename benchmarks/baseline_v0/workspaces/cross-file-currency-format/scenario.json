@@ -1,0 +1,8 @@
+{
+  "case_id": "cross-file-currency-format",
+  "kind": "python_call",
+  "module": "app.py",
+  "function": "format_total",
+  "args": [1250, "EUR"],
+  "expected": "EUR 12.50"
+}

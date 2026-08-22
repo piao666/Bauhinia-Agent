@@ -1,0 +1,6 @@
+{
+  "case_id": "permission-write-denied",
+  "kind": "observed_value",
+  "observed": "permission_denied",
+  "expected": "permission_denied"
+}

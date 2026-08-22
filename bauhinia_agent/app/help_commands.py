@@ -24,6 +24,8 @@ HELP_COMMANDS = [
     ("/compact", "Compact context now."),
     ("/mode", "Show permission mode."),
     ("/mode <standard|aggressive|bypass>", "Change permission mode."),
+    ("/self-model", "Show the latest scoped reliability and planning snapshot."),
+    ("/self-model <on|off>", "Enable or disable project-process Self Model guidance."),
     ("/mcp list", "List MCP server status."),
     ("/mcp doctor <server>", "Inspect one MCP server."),
     ("/mcp reconnect <server|all>", "Reconnect MCP servers in the background."),

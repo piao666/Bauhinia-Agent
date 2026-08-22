@@ -35,6 +35,11 @@ from bauhinia_agent.evaluation.models import (
     EvalVariantKind,
     Evaluator,
 )
+from bauhinia_agent.evaluation.evidence import (
+    EvaluationEvidenceAttestation,
+    EvaluationEvidenceError,
+    attest_evaluation_evidence,
+)
 from bauhinia_agent.evaluation.comparison import (
     DEFAULT_PROMOTION_THRESHOLDS,
     EvaluationComparisonDiagnostic,
@@ -72,6 +77,8 @@ __all__ = [
     "EvalVariant",
     "EvalVariantKind",
     "Evaluator",
+    "EvaluationEvidenceAttestation",
+    "EvaluationEvidenceError",
     "DEFAULT_PROMOTION_THRESHOLDS",
     "EvaluationComparisonDiagnostic",
     "EvaluationComparisonError",
@@ -84,4 +91,5 @@ __all__ = [
     "hash_text",
     "private_reference_hash",
     "PromotionThresholds",
+    "attest_evaluation_evidence",
 ]

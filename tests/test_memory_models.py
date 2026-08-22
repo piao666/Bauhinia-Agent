@@ -13,7 +13,6 @@ from bauhinia_agent.memory import (
     MemoryScope,
 )
 
-
 CREATED_AT = datetime(2026, 8, 8, 0, 0, tzinfo=UTC)
 
 
@@ -170,3 +169,4 @@ def test_lifecycle_changes_are_append_only_and_auditable(kind: str, memory_ids: 
     else:
         change = MemoryLifecycleChange(**values)  # type: ignore[arg-type]
         assert change.memory_ids == memory_ids
+        assert MemoryLifecycleChange.from_dict(change.to_dict()) == change

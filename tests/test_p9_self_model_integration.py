@@ -1,25 +1,38 @@
 from __future__ import annotations
 
-from bauhinia_agent.evaluation import EvalCase, EvalHarness, EvalObservation, EvalVariant, hash_text
-from bauhinia_agent.evolution import EvoEventStore
+from bauhinia_agent.evaluation import EvalCase, EvalHarness, EvalObservation, EvalRunInput, EvalVariant, hash_text
+from bauhinia_agent.evolution import EvidenceAdapter, EvidenceInput, EvoEventStore
 from bauhinia_agent.self_model import PolicySuggestionEngine, ProfileSelector, SelfModelService, TaskClassification
 
 
 class _Evaluator:
     version = "eval-v1"
 
-    def __init__(self, *, success: bool, risk: bool = False) -> None:
+    def __init__(self, store: EvoEventStore, *, success: bool, risk: bool = False) -> None:
+        self._evidence = EvidenceAdapter(store)
         self._success = success
         self._risk = risk
 
-    def evaluate(self, request) -> EvalObservation:
-        del request
+    def evaluate(self, request: EvalRunInput) -> EvalObservation:
+        recorded = self._evidence.record(
+            EvidenceInput(
+                run_id=request.run_id,
+                evidence_type="test",
+                source="pytest",
+                summary="migration verification passed" if self._success else "migration verification failed",
+                verified=True,
+                command="pytest -q",
+                exit_code=0 if self._success else 1,
+            )
+        )
+        assert recorded.persisted and recorded.evidence is not None
         return EvalObservation(
             task_outcome="task_success" if self._success else "task_failure",
             verification_quality=1.0,
             cost=2.0,
             latency_ms=20.0,
             risk_events=("unsafe request rejected",) if self._risk else (),
+            evidence_refs=(recorded.evidence.evidence_id,),
             verification_commands=("pytest -q",),
             claimed_success=self._success,
             evidence_success=self._success,
@@ -61,7 +74,7 @@ def test_p9_profile_and_policy_are_auditable_and_cannot_change_runtime_authority
         risk_level="high",
     )
     for index in range(5):
-        trial = harness.run(_case(index), variant, _Evaluator(success=False, risk=True), seed=index)
+        trial = harness.run(_case(index), variant, _Evaluator(store, success=False, risk=True), seed=index)
         assert trial.persisted and trial.trial is not None
         observed = service.record_observation(classification, source_event_id=trial.trial.event_id)
         assert observed.persisted

@@ -5,12 +5,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from bauhinia_agent.agent.background import BackgroundJobManager
+from bauhinia_agent.agent.evo_observer import AgentEvoObserver
 from bauhinia_agent.agent.loop import AgentLoop
 from bauhinia_agent.agent.session import AgentSession
 from bauhinia_agent.agent.subagent import SubagentRequest, SubagentRunner
 from bauhinia_agent.context.store import JsonlSessionStore
+from bauhinia_agent.evolution import EvoEventStore
+from bauhinia_agent.evolution.events import CollaborationTaskResultRecordedPayload
+from bauhinia_agent.planning.evo import PlanBudget, TaskContract
 from bauhinia_agent.providers.base import ChatProvider
 from bauhinia_agent.providers.types import ChatRequest, ChatResponse, ProviderCapabilities, ToolCall, ToolDefinition
+from bauhinia_agent.tools.delegate import create_delegate_tool
 from bauhinia_agent.tools.types import Tool, ToolResult, make_text_result
 
 
@@ -66,6 +71,109 @@ def _create_task_plan(session: AgentSession, *, task_id: str) -> None:
     assert result.ok is True
 
 
+def _structured_contract() -> TaskContract:
+    return TaskContract(
+        role="verifier",
+        plan_id="plan_delegate_contract",
+        node_id="node_delegate_contract",
+        goal="Run deterministic verification",
+        input_snapshot="tree@abc123",
+        allowed_effects=("execute", "write", "network"),
+        expected_evidence=("test",),
+        budget=PlanBudget(max_tool_calls=2, max_attempts=1, max_tokens=1000),
+        capabilities=("shell",),
+        resource_claims=("read:tests",),
+        minimum_confidence=0.7,
+    )
+
+
+def test_delegate_structured_contract_uses_dispatcher_and_rejects_mixed_legacy_fields(
+    tmp_path,
+) -> None:
+    runner = SubagentRunner(
+        store=JsonlSessionStore(tmp_path),
+        provider=FakeProvider([]),
+        tools=[_tool("shell")],
+    )
+    captured: list[tuple[TaskContract, str | None, str | None]] = []
+
+    def dispatch(
+        contract: TaskContract,
+        collaboration_id: str | None,
+        assignment_id: str | None,
+    ) -> ToolResult:
+        captured.append((contract, collaboration_id, assignment_id))
+        return make_text_result("delegate", "queued", job_id="bg_0001")
+
+    tool = create_delegate_tool(
+        runner,
+        parent_session_id="session_parent",
+        collaboration_dispatcher=dispatch,
+    )
+
+    result = tool.executor(
+        contract=_structured_contract().to_dict(),
+        collaboration_id="collaboration_one",
+        assignment_id="assignment_one",
+    )
+
+    assert result.ok is True
+    assert captured == [(_structured_contract(), "collaboration_one", "assignment_one")]
+    assert "required" not in tool.definition.parameters
+    mixed = tool.executor(
+        role="tester",
+        task="legacy",
+        contract=_structured_contract().to_dict(),
+    )
+    assert mixed.ok is False
+    assert mixed.data["field"] == "contract"
+
+
+def test_structured_delegate_rejects_generic_background_double_scheduling(
+    tmp_path,
+) -> None:
+    manager = BackgroundJobManager()
+    try:
+        store = JsonlSessionStore(tmp_path)
+        session = AgentSession.create(
+            store=store,
+            session_id="session_structured_background",
+            tools=[_tool("shell")],
+        )
+        loop = AgentLoop(
+            session=session,
+            provider=FakeProvider([]),
+            background_manager=manager,
+        )
+        call = ToolCall(
+            id="call_structured_background",
+            name="delegate",
+            arguments={
+                "contract": _structured_contract().to_dict(),
+                "run_in_background": True,
+            },
+        )
+        session.append_user_message("start")
+        session.append_assistant_response(
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[call],
+                finish_reason="tool_calls",
+            )
+        )
+
+        loop.tool_executor.execute_interactive([call])
+
+        tool_part = next(part for message in session.rebuild_view().messages for part in message.parts if part.kind == "tool_result")
+        assert tool_part.metadata["ok"] is False
+        assert tool_part.metadata["data"]["background_rejected"] == "structured_delegate_owns_scheduling"
+        assert manager.list(session_id=session.session_id) == []
+    finally:
+        manager.shutdown()
+
+
 def test_subagent_runner_filters_tools_by_profile(tmp_path) -> None:
     provider = FakeProvider([])
     runner = SubagentRunner(
@@ -119,6 +227,100 @@ def test_agent_loop_registers_delegate_and_foreground_returns_summary(tmp_path) 
     assert result.data["role"] == "researcher"
     assert result.data["child_session_id"]
     assert "child summary" in result.content
+
+
+def test_real_agent_loop_structured_delegate_records_child_outcome_and_aggregate(
+    tmp_path,
+) -> None:
+    from bauhinia_agent.permissions.manager import PermissionManager
+    from bauhinia_agent.permissions.policy import DefaultPermissionPolicy
+    from bauhinia_agent.permissions.types import PermissionMode
+    from bauhinia_agent.tools.shell import create_shell_tool
+
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "tests" / "test_contract.py").write_text(
+        "import unittest\n\nclass ContractTest(unittest.TestCase):\n" "    def test_contract(self):\n        self.assertTrue(True)\n",
+        encoding="utf-8",
+    )
+    _init_git_repo(repo)
+    data_root = repo / ".bauhinia-agent"
+    store = JsonlSessionStore(data_root)
+    shell = create_shell_tool(repo)
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_child_test",
+                        name="shell",
+                        arguments={"command": "python -m unittest -q tests.test_contract"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="Structured child verified the contract.",
+            ),
+        ]
+    )
+    session = AgentSession.create(
+        store=store,
+        session_id="session_structured_parent",
+        tools=[shell],
+        permission_manager=PermissionManager(
+            policy=DefaultPermissionPolicy(repo),
+            mode=PermissionMode.BYPASS,
+        ),
+    )
+    manager = BackgroundJobManager()
+    observer = AgentEvoObserver(session=session, provider=provider)
+    try:
+        loop = AgentLoop(
+            session=session,
+            provider=provider,
+            tools=[shell],
+            background_manager=manager,
+            evolution_observer=observer,
+        )
+        parent_run_id = loop.evolution_observer.begin_turn()  # type: ignore[union-attr]
+
+        queued = session.tool_registry.execute(
+            "delegate",
+            {
+                "contract": _structured_contract().to_dict(),
+                "collaboration_id": "collaboration_real_loop",
+                "assignment_id": "assignment_real_loop",
+            },
+        )
+
+        assert queued.ok is True
+        assert queued.data["status"] == "running"
+        assert manager.wait(timeout=5) is True
+        events = EvoEventStore(data_root).list_events()
+        event_types = [event.event_type for event in events]
+        assert "CollaborationTaskDelegated" in event_types
+        assert "EvidenceRecorded" in event_types
+        assert "OutcomeClassified" in event_types
+        assert "CollaborationTaskResultRecorded" in event_types
+        assert "CollaborationRunAggregated" in event_types
+        result_event = next(event for event in events if isinstance(event.payload, CollaborationTaskResultRecordedPayload))
+        assert result_event.refs.run_id == parent_run_id
+        assert result_event.payload.child_run_id is not None
+        assert result_event.payload.confidence == 0.95
+        assert result_event.payload.eligible_for_learning is True
+        assert result_event.payload.evidence_refs
+        assert result_event.payload.claims
+        child_outcome = next(event for event in events if event.event_type == "OutcomeClassified" and event.refs.run_id == result_event.payload.child_run_id)
+        assert result_event.payload.confidence_source_event_id == child_outcome.event_id
+    finally:
+        manager.shutdown()
 
 
 def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> None:
@@ -365,8 +567,10 @@ def test_isolated_coder_waiting_for_permission_is_failure_with_diff(tmp_path) ->
 
     assert result.ok is False
     assert result.error == "waiting_for_user_input"
-    assert result.worktree_path is not None
-    assert (Path(result.worktree_path) / "seed.txt").exists()
+    assert result.worktree_path is None
+    assert result.worktree_branch is None
+    worktrees_root = repo / ".git" / "fc-worktrees"
+    assert not worktrees_root.exists() or not any(worktrees_root.iterdir())
     assert (repo / "seed.txt").exists()
 
 

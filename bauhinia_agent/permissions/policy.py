@@ -26,7 +26,9 @@ _READONLY_GIT_COMMANDS = {"status", "diff", "log"}
 _AGGRESSIVE_ALLOWED_COMMANDS = (
     "pytest",
     "python -m pytest",
+    "python -m unittest",
     "python3 -m pytest",
+    "python3 -m unittest",
     "ruff",
     "mypy",
     "git status",

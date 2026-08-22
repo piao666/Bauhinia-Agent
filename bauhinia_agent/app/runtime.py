@@ -33,6 +33,7 @@ from bauhinia_agent.context.runtime_state import SessionRuntimeState
 from bauhinia_agent.permissions.types import PermissionMode
 from bauhinia_agent.providers.base import ChatProvider
 from bauhinia_agent.providers.types import ChatResponse, ChatStreamEvent, MainRequestOptions
+from bauhinia_agent.self_model.runtime import SelfModelRuntime
 from bauhinia_agent.tools.types import Tool
 
 
@@ -95,6 +96,7 @@ class AgentChatRunner:
     tool_event_handler: Callable[[ToolExecutionEvent], None] | None = None
     background_manager: BackgroundJobManager | None = None
     evolution_enabled: bool = False
+    self_model_runtime: SelfModelRuntime | None = None
     pending_guidance: list[str] = field(default_factory=list)
     _guidance_lock: threading.Lock = field(default_factory=threading.Lock)
     _cancellation_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -314,6 +316,8 @@ class AgentChatRunner:
                 session=self.current_session.session,
                 provider=self.provider,
             )
+        if self.self_model_runtime is not None:
+            kwargs["self_model_runtime"] = self.self_model_runtime
         loop = AgentLoop(**kwargs)
         self.loops.append(loop)
         return loop

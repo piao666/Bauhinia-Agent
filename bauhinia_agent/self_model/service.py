@@ -9,17 +9,20 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Protocol
 
+from bauhinia_agent.evaluation.evidence import EvaluationEvidenceError, attest_evaluation_evidence
 from bauhinia_agent.evolution import (
+    DETERMINISTIC_EVIDENCE_TYPES,
     EvaluationTrialRecordedPayload,
-    EvidenceRecordedPayload,
     EvoAppendResult,
     EvoEvent,
     EvoEventStore,
     EvoReferences,
     EvoStoreError,
     OutcomeClassifiedPayload,
+    OutcomeIntegrityError,
     SelfModelObservationRecordedPayload,
     SelfModelUpdatedPayload,
+    attest_outcome_event,
     new_evo_id,
     require_evo_id,
 )
@@ -34,8 +37,6 @@ from bauhinia_agent.self_model.models import (
     VerificationLevel,
     parse_utc,
 )
-
-_DETERMINISTIC_EVIDENCE = frozenset({"test", "lint", "type_check", "build", "diff"})
 
 
 class _SelfModelStore(Protocol):
@@ -188,16 +189,27 @@ class SelfModelService:
             source_run_ids=tuple(dict.fromkeys(item.run_id for item in observations)),
         )
 
-    def publish_profile(self, selector: ProfileSelector) -> ProfilePublishResult:
-        """Append an auditable snapshot; observations remain the rebuildable source."""
+    def publish_profile(
+        self,
+        selector: ProfileSelector,
+        *,
+        run_id: str | None = None,
+    ) -> ProfilePublishResult:
+        """Append an auditable snapshot; observations remain the rebuildable source.
+
+        Runtime consumers may bind the snapshot to the Agent Run that consumed it.
+        Callers that only need an offline profile keep the historical behaviour of
+        allocating an independent Run identifier.
+        """
 
         profile = self.build_profile(selector)
         profile_id = new_evo_id("self_model")
+        resolved_run_id = new_evo_id("run") if run_id is None else require_evo_id(run_id, field="run_id", kind="run")
         event = EvoEvent(
             event_id=new_evo_id("event"),
             event_type="SelfModelUpdated",
             refs=EvoReferences(
-                run_id=new_evo_id("run"),
+                run_id=resolved_run_id,
                 self_model_id=profile_id,
                 parent_event_id=profile.source_event_ids[-1] if profile.source_event_ids else None,
             ),
@@ -255,6 +267,18 @@ def _derive_observation(source: EvoEvent, events: list[EvoEvent], classification
             raise SelfModelError("classification evaluator does not match the Evaluation Trial")
         if payload.environment_hash != classification.environment_hash:
             raise SelfModelError("classification environment does not match the Evaluation Trial")
+        try:
+            attest_evaluation_evidence(
+                events,
+                payload.evidence_refs,
+                run_id=source.refs.run_id,
+                expected_success=payload.success,
+                reported_evidence_success=payload.evidence_success,
+                reported_commands=payload.verification_commands,
+                before_sequence=source.sequence,
+            )
+        except EvaluationEvidenceError as error:
+            raise SelfModelError(f"Evaluation Trial Evidence is invalid: {error}") from error
         quality = payload.verification_quality if payload.verification_quality is not None else payload.verification_coverage
         level: VerificationLevel = "none" if payload.verification_skipped or quality <= 0 else "strong" if quality >= 0.8 else "partial"
         return _DerivedObservation(
@@ -271,21 +295,15 @@ def _derive_observation(source: EvoEvent, events: list[EvoEvent], classification
         payload = source.payload
         if payload.outcome == "unknown" or not payload.evidence_refs:
             raise SelfModelError("Outcome observations require a classified result and Evidence references")
-        evidence = [
-            event.payload
-            for event in events
-            if event.event_type == "EvidenceRecorded"
-            and isinstance(event.payload, EvidenceRecordedPayload)
-            and event.refs.run_id == source.refs.run_id
-            and event.refs.evidence_id in payload.evidence_refs
-        ]
-        if len(evidence) != len(set(payload.evidence_refs)):
-            raise SelfModelError("Outcome Evidence references are incomplete or outside the source Run")
-        deterministic = [item for item in evidence if item.evidence_type in _DETERMINISTIC_EVIDENCE]
+        try:
+            records = attest_outcome_event(events, source)
+        except (OutcomeIntegrityError, ValueError) as error:
+            raise SelfModelError("Outcome does not match the canonical prior Evidence for its Run") from error
+        deterministic = [record for record in records if record.payload.evidence_type in DETERMINISTIC_EVIDENCE_TYPES and record.payload.verified and record.payload.exit_code is not None]
         if deterministic:
             quality = 1.0
             level = "strong"
-        elif evidence:
+        elif records:
             quality = 0.5
             level = "partial"
         else:

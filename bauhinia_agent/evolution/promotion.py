@@ -7,11 +7,17 @@ from typing import Protocol
 
 from bauhinia_agent.evaluation.comparison import (
     EvaluationComparisonRecord,
+    EvaluationComparisonError,
     EvaluationComparisonService,
     EvaluationComparisonSpec,
+    validate_comparison_report_facts,
 )
 from bauhinia_agent.evolution.candidate_artifacts import CandidateArtifactLifecycle, CandidateArtifactRecord
-from bauhinia_agent.evolution.evidence import redact_text
+from bauhinia_agent.evolution.evidence import (
+    EvidenceIntegrityError,
+    redact_text,
+    resolve_evidence_records,
+)
 from bauhinia_agent.evolution.events import (
     CandidateArtifactCreatedPayload,
     CandidateShadowTrialRecordedPayload,
@@ -34,6 +40,21 @@ class _PromotionStore(Protocol):
     def append(self, event: EvoEvent) -> EvoAppendResult: ...
 
     def list_events(self) -> list[EvoEvent]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionReviewerIdentity:
+    """Reviewer identity established by an authenticated application boundary."""
+
+    subject: str
+    role: str
+    authenticated_by: str
+
+
+class PromotionIdentityProvider(Protocol):
+    """Resolve the current authenticated reviewer; domain callers cannot self-assert it."""
+
+    def current_reviewer(self) -> PromotionReviewerIdentity | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,8 +91,14 @@ class PromotionGateResult:
 class CandidateLifecycleService:
     """Project lifecycle state without runtime, permission, or materialization effects."""
 
-    def __init__(self, store: EvoEventStore | _PromotionStore) -> None:
+    def __init__(
+        self,
+        store: EvoEventStore | _PromotionStore,
+        *,
+        identity_provider: PromotionIdentityProvider | None = None,
+    ) -> None:
         self._store = store
+        self._identity_provider = identity_provider
 
     def state(self, artifact_id: str) -> CandidateArtifactLifecycle:
         require_evo_id(artifact_id, field="artifact_id", kind="artifact")
@@ -90,9 +117,7 @@ class CandidateLifecycleService:
         _artifact(events, artifact_id)
         if self.state(artifact_id) is not CandidateArtifactLifecycle.CANDIDATE:
             raise PromotionError("only a Candidate Artifact can enter Shadow")
-        if not any(
-            event.event_type == "CandidateShadowTrialRecorded" and isinstance(event.payload, CandidateShadowTrialRecordedPayload) and event.payload.artifact_id == artifact_id for event in events
-        ):
+        if not any(_is_valid_shadow_trial(event, events, artifact_id) for event in events):
             raise PromotionError("entering Shadow requires at least one recorded suggestion or Shadow Trial")
         return self._transition(
             artifact_id,
@@ -112,6 +137,7 @@ class CandidateLifecycleService:
         _require_latest_report(events, artifact_id, report.event_id)
         if report.payload.artifact_id != artifact_id or report.payload.artifact_version != artifact.payload.artifact_version or not report.payload.eligible:
             raise PromotionError("Validated requires an eligible comparison report for this Artifact")
+        _require_report_facts(events, report)
         return self._transition(
             artifact_id,
             from_state=CandidateArtifactLifecycle.SHADOW,
@@ -130,7 +156,14 @@ class CandidateLifecycleService:
         reviewer_role: str,
         reason: str,
     ) -> PromotionResult:
-        if reviewer_role not in PROMOTION_APPROVER_ROLES:
+        identity = None if self._identity_provider is None else self._identity_provider.current_reviewer()
+        if identity is None:
+            raise PromotionError("Promoted requires an authenticated maintainer or owner approver")
+        if not identity.subject.strip() or not identity.role.strip() or not identity.authenticated_by.strip():
+            raise PromotionError("promotion reviewer identity is incomplete")
+        if identity.subject != reviewer or identity.role != reviewer_role:
+            raise PromotionError("promotion reviewer arguments do not match authenticated identity")
+        if identity.role not in PROMOTION_APPROVER_ROLES:
             raise PromotionError("Promoted requires a maintainer or owner approver")
         events = self._store.list_events()
         if self.state(artifact_id) is not CandidateArtifactLifecycle.VALIDATED:
@@ -140,6 +173,7 @@ class CandidateLifecycleService:
         _require_latest_report(events, artifact_id, report.event_id)
         if report.payload.artifact_id != artifact_id or report.payload.artifact_version != artifact.payload.artifact_version or not report.payload.eligible:
             raise PromotionError("Promoted requires an eligible report for this Artifact")
+        _require_report_facts(events, report)
         return self._transition(
             artifact_id,
             from_state=CandidateArtifactLifecycle.VALIDATED,
@@ -147,7 +181,12 @@ class CandidateLifecycleService:
             reviewer=reviewer,
             reason=reason,
             evaluation_event_ids=(report.event_id,),
-            extensions={"reviewer_role": reviewer_role, "permissions_changed": False, "materialized": False},
+            extensions={
+                "reviewer_role": identity.role,
+                "reviewer_authenticated_by": identity.authenticated_by,
+                "permissions_changed": False,
+                "materialized": False,
+            },
         )
 
     def reject_from_report(self, artifact_id: str, report_id: str, *, reason: str) -> PromotionResult:
@@ -351,6 +390,28 @@ def _artifact(events: list[EvoEvent], artifact_id: str) -> CandidateArtifactReco
     return CandidateArtifactRecord(event.event_id, event.refs.artifact_id, event.refs.run_id, event.occurred_at, event.payload)
 
 
+def _is_valid_shadow_trial(
+    event: EvoEvent,
+    events: list[EvoEvent],
+    artifact_id: str,
+) -> bool:
+    if event.event_type != "CandidateShadowTrialRecorded" or not isinstance(event.payload, CandidateShadowTrialRecordedPayload) or event.payload.artifact_id != artifact_id:
+        return False
+    try:
+        records = resolve_evidence_records(
+            events,
+            event.payload.evidence_refs,
+            run_id=event.refs.run_id,
+            require_verified=True,
+            deterministic_only=True,
+            require_exit_code=True,
+            before_sequence=event.sequence,
+        )
+    except (EvidenceIntegrityError, ValueError):
+        return False
+    return all(record.payload.exit_code == 0 for record in records) == event.payload.passed
+
+
 def _report(events: list[EvoEvent], report_id: str) -> EvoEvent[EvaluationComparisonCompletedPayload]:
     event = next(
         (event for event in events if event.event_type == "EvaluationComparisonCompleted" and isinstance(event.payload, EvaluationComparisonCompletedPayload) and event.payload.report_id == report_id),
@@ -376,6 +437,16 @@ def _require_latest_report(events: list[EvoEvent], artifact_id: str, event_id: s
     )
     if latest is None or latest.event_id != event_id:
         raise PromotionError("lifecycle decisions require the latest evaluation report for this Artifact")
+
+
+def _require_report_facts(
+    events: list[EvoEvent],
+    report: EvoEvent[EvaluationComparisonCompletedPayload],
+) -> None:
+    try:
+        validate_comparison_report_facts(events, report)
+    except EvaluationComparisonError as error:
+        raise PromotionError(f"evaluation report facts could not be verified: {error}") from error
 
 
 def _previous_promoted(events: list[EvoEvent], artifact_id: str) -> CandidateArtifactRecord | None:
